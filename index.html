@@ -415,8 +415,28 @@ function loop(ts) {
   const grey = toGreyscale(imageData);
   const thresh = adaptiveThreshold(grey, sw, sh, 31, 4);
 
-  // ── Stage 3: Detect marker ──
-  const quad = detectMarker(thresh, sw, sh);
+  // ── Stage 3: Detect marker — only inside the guide box region ──
+  // Crop to center 70% of frame — matches the guide box on screen
+  // This prevents the laptop bezel / background from being detected
+  const cropFrac = 0.70;
+  const cropX = Math.round(sw * (1 - cropFrac) / 2);
+  const cropY = Math.round(sh * (1 - cropFrac) / 2);
+  const cropW = Math.round(sw * cropFrac);
+  const cropH = Math.round(sh * cropFrac);
+
+  // Extract cropped region of thresh
+  const threshCrop = new Uint8Array(cropW * cropH);
+  for (let cy2 = 0; cy2 < cropH; cy2++) {
+    for (let cx2 = 0; cx2 < cropW; cx2++) {
+      threshCrop[cy2 * cropW + cx2] = thresh[(cropY + cy2) * sw + (cropX + cx2)];
+    }
+  }
+
+  // Detect in cropped coords, then offset result back to full frame coords
+  const quadCrop = detectMarker(threshCrop, cropW, cropH);
+  const quad = quadCrop
+    ? quadCrop.map(([x, y]) => [x + cropX, y + cropY])
+    : null;
   const tDetect = performance.now() - t0;
 
   if (quad) {
@@ -547,11 +567,28 @@ function detectMarker(thresh, w, h) {
     dbg('No border bands found (rows:'+rowBands.length+' cols:'+colBands.length+')'); return null;
   }
 
-  // Take outermost bands
-  const top    = rowBands[0];
-  const bottom = rowBands[rowBands.length - 1];
-  const left   = colBands[0];
-  const right  = colBands[colBands.length - 1];
+  // Try all combinations of row/col band pairs, pick the most square one
+  let bestQuad = null, bestScore = Infinity;
+  for (let ri = 0; ri < rowBands.length - 1; ri++) {
+    for (let rj = ri + 1; rj < rowBands.length; rj++) {
+      for (let ci = 0; ci < colBands.length - 1; ci++) {
+        for (let cj = ci + 1; cj < colBands.length; cj++) {
+          const mW = colBands[cj].end - colBands[ci].start;
+          const mH = rowBands[rj].end - rowBands[ri].start;
+          const asp = mW / mH;
+          // Score = how far from square (0 = perfect square)
+          const score = Math.abs(1 - asp);
+          if (score < bestScore) {
+            bestScore = score;
+            bestQuad = { top: rowBands[ri], bottom: rowBands[rj],
+                         left: colBands[ci], right: colBands[cj] };
+          }
+        }
+      }
+    }
+  }
+  if (!bestQuad) { dbg('No quad candidate'); return null; }
+  const { top, bottom, left, right } = bestQuad;
 
   // Validate rough square shape
   const markerH = bottom.end - top.start;
@@ -559,7 +596,7 @@ function detectMarker(thresh, w, h) {
   if (markerH < 20 || markerW < 20) return null;
 
   const aspect = markerW / markerH;
-  if (aspect < 0.7 || aspect > 1.4) { dbg('Bad aspect '+aspect.toFixed(2)); return null; }
+  if (aspect < 0.82 || aspect > 1.22) { dbg('Bad aspect '+aspect.toFixed(2)+' (need 0.82-1.22)'); return null; }
 
   // Reject if too small or too large (rejects bezel/fullscreen false positives)
   if (markerW < w * 0.08 || markerW > w * 0.78) { dbg('Size OOB: '+markerW+'x'+markerH+' frame:'+w+'x'+h); return null; }
