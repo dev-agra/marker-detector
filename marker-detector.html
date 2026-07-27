@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Marker Detector</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --border: #2a2a2a;
+      --accent: #00e5a0;
+      --accent-dim: rgba(0, 229, 160, 0.12);
+      --text: #f0f0f0;
+      --text-muted: #666;
+      --red: #ff4444;
+      --amber: #ffaa00;
+    }
+
+    html,
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* ── Header ── */
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    #header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    #status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background 0.2s;
+    }
+
+    #status-dot.scanning {
+      background: var(--amber);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    #status-dot.found {
+      background: var(--accent);
+      animation: none;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: 0.4
+      }
+    }
+
+    /* ── Camera view ── */
+    #camera-wrap {
+      position: relative;
+      flex: 1;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Guide box overlay */
+    #guide {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(65vw, 260px);
+      height: min(65vw, 260px);
+      pointer-events: none;
+    }
+
+    .guide-corner {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border-color: rgba(255, 255, 255, 0.7);
+      border-style: solid;
+    }
+
+    .guide-corner.tl {
+      top: 0;
+      left: 0;
+      border-width: 2px 0 0 2px;
+      border-radius: 3px 0 0 0;
+    }
+
+    .guide-corner.tr {
+      top: 0;
+      right: 0;
+      border-width: 2px 2px 0 0;
+      border-radius: 0 3px 0 0;
+    }
+
+    .guide-corner.bl {
+      bottom: 0;
+      left: 0;
+      border-width: 0 0 2px 2px;
+      border-radius: 0 0 0 3px;
+    }
+
+    .guide-corner.br {
+      bottom: 0;
+      right: 0;
+      border-width: 0 2px 2px 0;
+      border-radius: 0 0 3px 0;
+    }
+
+    #guide-label {
+      position: absolute;
+      bottom: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.5);
+      white-space: nowrap;
+      letter-spacing: 0.3px;
+    }
+
+    /* Detected quad overlay */
+    #quad-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    /* ── Bottom panel ── */
+    #panel {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    /* Timing strip */
+    #timing-strip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+      min-height: 40px;
+    }
+
+    #timing-strip .t-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      min-width: 56px;
+    }
+
+    .t-val {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      color: var(--text);
+      min-width: 52px;
+    }
+
+    .t-val.accent {
+      color: var(--accent);
+    }
+
+    #fps-badge {
+      margin-left: auto;
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--text-muted);
+    }
+
+    /* Result canvas */
+    #result-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px 16px;
+      gap: 16px;
+      min-height: 130px;
+    }
+
+    #result-canvas {
+      width: 100px;
+      height: 100px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #000;
+      image-rendering: pixelated;
+    }
+
+    #result-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .info-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .info-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+
+    .info-val {
+      font-size: 13px;
+      font-family: monospace;
+      color: var(--text);
+    }
+
+    .info-val.good {
+      color: var(--accent);
+    }
+
+    .info-val.warn {
+      color: var(--amber);
+    }
+
+    .info-val.idle {
+      color: var(--text-muted);
+    }
+
+    /* Empty state */
+    #empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      font-size: 13px;
+      width: 100%;
+      padding: 10px 0;
+    }
+
+    #empty-icon {
+      font-size: 28px;
+      opacity: 0.3;
+    }
+
+    /* Hidden processing canvases */
+    #proc-canvas,
+    #warp-canvas {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+
+    <div id="header">
+      <h1>Marker Detector</h1>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="status-text" style="font-size:12px;color:var(--text-muted)">Starting…</span>
+        <div id="status-dot"></div>
+      </div>
+    </div>
+
+    <div id="camera-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="quad-canvas"></canvas>
+      <div id="guide">
+        <div class="guide-corner tl"></div>
+        <div class="guide-corner tr"></div>
+        <div class="guide-corner bl"></div>
+        <div class="guide-corner br"></div>
+        <span id="guide-label">Point at marker</span>
+      </div>
+    </div>
+
+    <div id="panel">
+      <div id="timing-strip">
+        <span class="t-label">Detect</span>
+        <span class="t-val" id="t-detect">—</span>
+        <span class="t-label" style="margin-left:8px">Warp</span>
+        <span class="t-val" id="t-warp">—</span>
+        <span class="t-label" style="margin-left:8px">Total</span>
+        <span class="t-val accent" id="t-total">—</span>
+        <span id="fps-badge">— fps</span>
+      </div>
+
+      <div id="result-wrap">
+        <div id="empty-state">
+          <div id="empty-icon">◻</div>
+          <span>Waiting for marker</span>
+        </div>
+        <canvas id="result-canvas" style="display:none"></canvas>
+        <div id="result-info" style="display:none">
+          <div class="info-row">
+            <span class="info-label">Orientation</span>
+            <span class="info-val idle" id="r-orient">—</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Confidence</span>
+            <span class="info-val idle" id="r-conf">—</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Marker size</span>
+            <span class="info-val idle" id="r-size">—</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Last capture</span>
+            <span class="info-val idle" id="r-time">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Hidden canvases for processing -->
+  <canvas id="proc-canvas"></canvas>
+  <canvas id="warp-canvas"></canvas>
+
+  <script>
+    // ─────────────────────────────────────────────
+    // MARKER GEOMETRY (from actual marker analysis)
+    // All as fractions of marker width
+    // ─────────────────────────────────────────────
+    const M = {
+      borderFrac: 0.082,   // 14/170 — outer border thickness
+      wsFrac: 0.412,   // 70/170 — white square ends at this fraction
+      // The white square occupies top-left (borderFrac to wsFrac) in both axes
+      // Anchor (black square) sits inside white square
+      anchorStart: 0.153,   // 26/170
+      anchorEnd: 0.324,   // 55/170
+    };
+
+    // ─────────────────────────────────────────────
+    // STATE
+    // ─────────────────────────────────────────────
+    const video = document.getElementById('video');
+    const quadCanvas = document.getElementById('quad-canvas');
+    const qCtx = quadCanvas.getContext('2d');
+    const procCanvas = document.getElementById('proc-canvas');
+    const pCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+    const warpCanvas = document.getElementById('warp-canvas');
+    const wCtx = warpCanvas.getContext('2d', { willReadFrequently: true });
+    const resultCanvas = document.getElementById('result-canvas');
+    const rCtx = resultCanvas.getContext('2d');
+
+    const PROC_W = 480, PROC_H = 270;   // detection resolution (1/4 of 1080p)
+    const WARP_SZ = 200;                 // output crop size
+
+    procCanvas.width = PROC_W;
+    procCanvas.height = PROC_H;
+    warpCanvas.width = WARP_SZ;
+    warpCanvas.height = WARP_SZ;
+    resultCanvas.width = WARP_SZ;
+    resultCanvas.height = WARP_SZ;
+
+    let lastFrameTime = 0;
+    let frameCount = 0;
+    let fps = 0;
+    let roi = null;         // { x,y,w,h } locked region of interest
+    let missCount = 0;
+    let lastDetection = null;
+    let scanning = false;
+
+    // ─────────────────────────────────────────────
+    // CAMERA SETUP
+    // ─────────────────────────────────────────────
+    async function startCamera() {
+      setStatus('Requesting camera…', 'idle');
+      try {
+        // Prefer back camera, ask for high res
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          }
+        });
+        video.srcObject = stream;
+        await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
+        await video.play();
+        setStatus('Scanning…', 'scanning');
+        scanning = true;
+        requestAnimationFrame(loop);
+      } catch (e) {
+        setStatus('Camera denied', 'idle');
+        console.error(e);
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // MAIN LOOP
+    // ─────────────────────────────────────────────
+    let frameSkip = 0;
+    function loop(ts) {
+      if (!scanning) return;
+      requestAnimationFrame(loop);
+
+      // FPS calculation
+      frameCount++;
+      if (ts - lastFrameTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastFrameTime = ts;
+        document.getElementById('fps-badge').textContent = fps + ' fps';
+      }
+
+      // Sync quad canvas to camera area
+      const cr = document.getElementById('camera-wrap').getBoundingClientRect();
+      quadCanvas.width = cr.width;
+      quadCanvas.height = cr.height;
+
+      // Skip every other frame once ROI-locked (saves CPU)
+      frameSkip = (frameSkip + 1) % (roi ? 2 : 1);
+      if (frameSkip !== 0) return;
+
+      if (video.readyState < 2) return;
+
+      const t0 = performance.now();
+
+      // ── Stage 1: Downsample ──
+      // Maintain aspect ratio
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale = Math.min(PROC_W / vw, PROC_H / vh);
+      const sw = Math.round(vw * scale), sh = Math.round(vh * scale);
+      pCtx.drawImage(video, 0, 0, sw, sh);
+      const imageData = pCtx.getImageData(0, 0, sw, sh);
+
+      // ── Stage 2: Greyscale + threshold ──
+      const grey = toGreyscale(imageData);
+      const thresh = adaptiveThreshold(grey, sw, sh, 31, 4);
+
+      // ── Stage 3: Detect marker ──
+      const quad = detectMarker(thresh, sw, sh);
+      const tDetect = performance.now() - t0;
+
+      if (quad) {
+        missCount = 0;
+        // Scale quad back to video coords
+        const scaleX = vw / sw, scaleY = vh / sh;
+        const videoQuad = quad.map(([x, y]) => [x * scaleX, y * scaleY]);
+
+        // Lock ROI
+        const xs = videoQuad.map(p => p[0]), ys = videoQuad.map(p => p[1]);
+        const pad = vw * 0.08;
+        roi = {
+          x: Math.max(0, Math.min(...xs) - pad),
+          y: Math.max(0, Math.min(...ys) - pad),
+          w: Math.min(vw, Math.max(...xs) - Math.min(...xs) + pad * 2),
+          h: Math.min(vh, Math.max(...ys) - Math.min(...ys) + pad * 2),
+        };
+
+        // Draw quad overlay
+        drawQuad(qCtx, videoQuad, vw, vh, cr);
+
+        // ── Stage 4: Warp + orient ──
+        const t1 = performance.now();
+        const { canvas: warped, rotation, confidence } =
+          warpAndOrient(video, videoQuad, vw, vh);
+        const tWarp = performance.now() - t1;
+        const tTotal = performance.now() - t0;
+
+        // Show result
+        rCtx.drawImage(warped, 0, 0, WARP_SZ, WARP_SZ);
+        showResult(rotation, confidence, quad, tDetect, tWarp, tTotal);
+
+      } else {
+        missCount++;
+        if (missCount > 8) {
+          roi = null;
+          qCtx.clearRect(0, 0, quadCanvas.width, quadCanvas.height);
+        }
+        updateTiming(tDetect, null, null);
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // IMAGE PROCESSING
+    // ─────────────────────────────────────────────
+
+    function toGreyscale(imageData) {
+      const { data, width, height } = imageData;
+      const out = new Uint8Array(width * height);
+      for (let i = 0; i < out.length; i++) {
+        const o = i * 4;
+        // Use MAX channel instead of luminance weights.
+        // Handles blue-tinted screens: a dark blue pixel has low R, low G, low B
+        // so max(R,G,B) still reads dark, while a white pixel reads bright.
+        // Standard luminance would under-darken blue-dominant "black" regions.
+        out[i] = Math.max(data[o], data[o + 1], data[o + 2]);
+      }
+      return out;
+    }
+
+    function adaptiveThreshold(grey, w, h, blockSize, C) {
+      // Local mean via box filter approximation (integral image)
+      const integral = new Int32Array((w + 1) * (h + 1));
+      const iw = w + 1;
+      for (let y = 1; y <= h; y++) {
+        let rowSum = 0;
+        for (let x = 1; x <= w; x++) {
+          rowSum += grey[(y - 1) * w + (x - 1)];
+          integral[y * iw + x] = integral[(y - 1) * iw + x] + rowSum;
+        }
+      }
+
+      const half = Math.floor(blockSize / 2);
+      const out = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const x1 = Math.max(0, x - half), y1 = Math.max(0, y - half);
+          const x2 = Math.min(w - 1, x + half), y2 = Math.min(h - 1, y + half);
+          const area = (x2 - x1) * (y2 - y1);
+          const sum = integral[(y2 + 1) * iw + (x2 + 1)]
+            - integral[y1 * iw + (x2 + 1)]
+            - integral[(y2 + 1) * iw + x1]
+            + integral[y1 * iw + x1];
+          const mean = sum / area;
+          out[y * w + x] = grey[y * w + x] < (mean - C) ? 0 : 255;
+        }
+      }
+      return out;
+    }
+
+    // ─────────────────────────────────────────────
+    // MARKER DETECTION
+    // Find a quad with the right proportions for our marker
+    // Strategy: scanline projection to find dense black bands
+    // ─────────────────────────────────────────────
+
+    function detectMarker(thresh, w, h) {
+      // Sum black pixels per row and column
+      const rowSum = new Int32Array(h);
+      const colSum = new Int32Array(w);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (thresh[y * w + x] === 0) {
+            rowSum[y]++;
+            colSum[x]++;
+          }
+        }
+      }
+
+      // Find dense black row bands (marker border)
+      // A border row has >50% black pixels
+      const rowThresh = w * 0.30;
+      const colThresh = h * 0.30;
+
+      // Find contiguous bands in row profile
+      const rowBands = findBands(rowSum, rowThresh, h);
+      const colBands = findBands(colSum, colThresh, w);
+
+      if (rowBands.length < 2 || colBands.length < 2) return null;
+
+      // Take outermost bands
+      const top = rowBands[0];
+      const bottom = rowBands[rowBands.length - 1];
+      const left = colBands[0];
+      const right = colBands[colBands.length - 1];
+
+      // Validate rough square shape
+      const markerH = bottom.end - top.start;
+      const markerW = right.end - left.start;
+      if (markerH < 20 || markerW < 20) return null;
+
+      const aspect = markerW / markerH;
+      if (aspect < 0.7 || aspect > 1.4) return null;
+
+      // Validate minimum size relative to image
+      if (markerW < w * 0.05 || markerW > w * 0.95) return null;
+
+      // Verify inner content: center should NOT be all black
+      const cx = (left.start + right.end) >> 1;
+      const cy = (top.start + bottom.end) >> 1;
+      const innerBlack = sampleRect(thresh, w,
+        left.end, top.end, right.start - left.end, bottom.start - top.end);
+      if (innerBlack > 0.92) return null; // solid black block, not our marker
+
+      // Validate white square in top-left inner region
+      const innerW = right.start - left.end;
+      const innerH = bottom.start - top.end;
+      const wsW = Math.round(innerW * (M.wsFrac - M.borderFrac) / (1 - 2 * M.borderFrac));
+      const wsH = Math.round(innerH * (M.wsFrac - M.borderFrac) / (1 - 2 * M.borderFrac));
+      const wsWhiteness = 1 - sampleRect(thresh, w,
+        left.end, top.end, wsW, wsH);
+      if (wsWhiteness < 0.35) return null; // TL corner should be mostly white
+
+      // Return the four corners as a quad [TL, TR, BR, BL]
+      return [
+        [left.start, top.start],
+        [right.end, top.start],
+        [right.end, bottom.end],
+        [left.start, bottom.end],
+      ];
+    }
+
+    function findBands(sums, threshold, max) {
+      const bands = [];
+      let inBand = false, bandStart = 0;
+      for (let i = 0; i < max; i++) {
+        if (sums[i] >= threshold) {
+          if (!inBand) { inBand = true; bandStart = i; }
+        } else {
+          if (inBand) {
+            inBand = false;
+            bands.push({ start: bandStart, end: i, mid: (bandStart + i) >> 1 });
+          }
+        }
+      }
+      if (inBand) bands.push({ start: bandStart, end: max, mid: (bandStart + max) >> 1 });
+      return bands;
+    }
+
+    function sampleRect(thresh, w, x, y, rw, rh) {
+      // Returns fraction of black pixels in rectangle
+      x = Math.max(0, Math.round(x));
+      y = Math.max(0, Math.round(y));
+      rw = Math.max(1, Math.round(rw));
+      rh = Math.max(1, Math.round(rh));
+      let black = 0, total = 0;
+      const step = Math.max(1, Math.min(rw, rh) >> 3); // sample every nth pixel
+      for (let dy = 0; dy < rh; dy += step) {
+        for (let dx = 0; dx < rw; dx += step) {
+          if (thresh[(y + dy) * w + (x + dx)] === 0) black++;
+          total++;
+        }
+      }
+      return total > 0 ? black / total : 0;
+    }
+
+    // ─────────────────────────────────────────────
+    // WARP + ORIENT
+    // ─────────────────────────────────────────────
+
+    function warpAndOrient(videoEl, quad, vw, vh) {
+      // Draw full-res video to warp canvas using perspective correction
+      // We use a simple affine crop since our quad is axis-aligned from scanlines
+      // For a proper perspective warp we use the homography approach
+
+      const [tl, tr, br, bl] = quad;
+
+      // Compute homography and warp
+      const H = computeHomography(
+        tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1],
+        0, 0, WARP_SZ, 0, WARP_SZ, WARP_SZ, 0, WARP_SZ
+      );
+
+      // Sample the full video into warp canvas pixel by pixel using inverse H
+      wCtx.drawImage(videoEl, 0, 0, vw, vh, 0, 0, WARP_SZ, WARP_SZ);
+      const srcData = wCtx.getImageData(0, 0, WARP_SZ, WARP_SZ);
+
+      // Fast warp using canvas drawImage with clipping transform
+      // For axis-aligned quads (our scanline detection gives bounding box),
+      // use a simpler crop + scale approach with bilinear filtering from the browser
+      const quadW = Math.hypot(tr[0] - tl[0], tr[1] - tl[1]);
+      const quadH = Math.hypot(bl[0] - tl[0], bl[1] - tl[1]);
+
+      // Create offscreen canvas at exact quad pixel count
+      const off = new OffscreenCanvas ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
+        : document.createElement('canvas');
+      off.width = off.height = WARP_SZ;
+      const offCtx = off.getContext('2d');
+
+      // Use canvas transform to warp quad to square
+      offCtx.save();
+      const scaleX = WARP_SZ / quadW;
+      const scaleY = WARP_SZ / quadH;
+      offCtx.scale(scaleX, scaleY);
+      offCtx.drawImage(videoEl,
+        tl[0], tl[1], quadW, quadH,
+        0, 0, quadW, quadH
+      );
+      offCtx.restore();
+
+      // ── Orientation detection ──
+      // Sample the four inner corners after warp
+      // TL corner should have high whiteness (white square)
+      // Check all four — the one with highest white = TL
+      const sz = WARP_SZ;
+      const warped = off.getContext('2d').getImageData(0, 0, sz, sz);
+      const rotation = detectOrientation(warped, sz);
+      const confidence = getOrientationConfidence(warped, sz, rotation);
+
+      // Apply rotation correction
+      const corrected = new OffscreenCanvas ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
+        : document.createElement('canvas');
+      corrected.width = corrected.height = WARP_SZ;
+      const cCtx = corrected.getContext('2d');
+      cCtx.save();
+      cCtx.translate(WARP_SZ / 2, WARP_SZ / 2);
+      cCtx.rotate(rotation * Math.PI / 2);
+      cCtx.drawImage(off, -WARP_SZ / 2, -WARP_SZ / 2);
+      cCtx.restore();
+
+      return { canvas: corrected, rotation, confidence };
+    }
+
+    function detectOrientation(imageData, sz) {
+      // Sample whiteness of inner-corner zones (15% of sz from each corner)
+      const z = Math.round(sz * 0.15);  // zone size
+      const b = Math.round(sz * 0.08);  // margin from edge
+
+      const zones = [
+        cornerWhiteness(imageData, sz, b, b, z), // TL
+        cornerWhiteness(imageData, sz, sz - b - z, b, z), // TR
+        cornerWhiteness(imageData, sz, b, sz - b - z, z), // BL
+        cornerWhiteness(imageData, sz, sz - b - z, sz - b - z, z), // BR
+      ];
+
+      // The corner with highest whiteness is TL (white square location)
+      const maxIdx = zones.indexOf(Math.max(...zones));
+      // Rotation needed: 0=TL, 1=TR(need -1 or 3), 2=BL(need 1), 3=BR(need 2)
+      const rotMap = [0, 3, 1, 2]; // how many 90° CW rotations to apply
+      return rotMap[maxIdx];
+    }
+
+    function cornerWhiteness(imageData, sz, x, y, z) {
+      const { data, width } = imageData;
+      let bright = 0, total = 0;
+      const step = Math.max(1, z >> 3);
+      for (let dy = 0; dy < z; dy += step) {
+        for (let dx = 0; dx < z; dx += step) {
+          const px = ((y + dy) * width + (x + dx)) * 4;
+          const lum = (data[px] * 77 + data[px + 1] * 150 + data[px + 2] * 29) >> 8;
+          if (lum > 130) bright++;
+          total++;
+        }
+      }
+      return total > 0 ? bright / total : 0;
+    }
+
+    function getOrientationConfidence(imageData, sz, rotation) {
+      const z = Math.round(sz * 0.15);
+      const b = Math.round(sz * 0.08);
+      const zones = [
+        cornerWhiteness(imageData, sz, b, b, z),
+        cornerWhiteness(imageData, sz, sz - b - z, b, z),
+        cornerWhiteness(imageData, sz, b, sz - b - z, z),
+        cornerWhiteness(imageData, sz, sz - b - z, sz - b - z, z),
+      ];
+      const sorted = [...zones].sort((a, b) => b - a);
+      // Confidence = gap between highest and second-highest whiteness
+      const gap = sorted[0] - sorted[1];
+      return Math.min(100, Math.round(gap * 200));
+    }
+
+    // Compute 3x3 homography from 4 point correspondences (DLT)
+    function computeHomography(x1, y1, x2, y2, x3, y3, x4, y4, u1, v1, u2, v2, u3, v3, u4, v4) {
+      // Build 8x9 matrix A for DLT
+      const A = [];
+      const pts = [[x1, y1, u1, v1], [x2, y2, u2, v2], [x3, y3, u3, v3], [x4, y4, u4, v4]];
+      for (const [x, y, u, v] of pts) {
+        A.push([-x, -y, -1, 0, 0, 0, u * x, u * y, u]);
+        A.push([0, 0, 0, -x, -y, -1, v * x, v * y, v]);
+      }
+      // Solve via Gaussian elimination (simplified for 8x9)
+      const h = gaussianElimination(A);
+      return h;
+    }
+
+    function gaussianElimination(A) {
+      const n = A.length;
+      for (let col = 0; col < n; col++) {
+        // Pivot
+        let maxRow = col;
+        for (let r = col + 1; r < n; r++)
+          if (Math.abs(A[r][col]) > Math.abs(A[maxRow][col])) maxRow = r;
+        [A[col], A[maxRow]] = [A[maxRow], A[col]];
+        const piv = A[col][col];
+        if (Math.abs(piv) < 1e-10) continue;
+        for (let r = 0; r < n; r++) {
+          if (r === col) continue;
+          const f = A[r][col] / piv;
+          for (let c = col; c <= n; c++) A[r][c] -= f * A[col][c];
+        }
+        for (let c = col; c <= n; c++) A[col][c] /= piv;
+      }
+      return A.map(r => r[n]);
+    }
+
+    // ─────────────────────────────────────────────
+    // QUAD OVERLAY DRAWING
+    // ─────────────────────────────────────────────
+
+    function drawQuad(ctx, quad, vw, vh, cr) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      // Scale quad from video coords to display coords
+      const sx = cr.width / vw, sy = cr.height / vh;
+      const pts = quad.map(([x, y]) => [x * sx, y * sy]);
+
+      // Animated green outline
+      const t = (Date.now() % 1000) / 1000;
+      ctx.setLineDash([8, 4]);
+      ctx.lineDashOffset = -t * 24;
+      ctx.strokeStyle = '#00e5a0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Corner dots
+      ctx.fillStyle = '#00e5a0';
+      for (const [x, y] of pts) {
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // UI UPDATES
+    // ─────────────────────────────────────────────
+
+    const ORIENT_LABELS = ['0° — correct', '90° CW', '180°', '270° CW'];
+
+    function showResult(rotation, confidence, quad, tDetect, tWarp, tTotal) {
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('result-canvas').style.display = 'block';
+      document.getElementById('result-info').style.display = 'flex';
+
+      const orientEl = document.getElementById('r-orient');
+      orientEl.textContent = ORIENT_LABELS[rotation];
+      orientEl.className = 'info-val ' + (rotation === 0 ? 'good' : 'warn');
+
+      const confEl = document.getElementById('r-conf');
+      confEl.textContent = confidence + '%';
+      confEl.className = 'info-val ' + (confidence > 60 ? 'good' : confidence > 30 ? 'warn' : 'idle');
+
+      const sz = Math.round(
+        Math.hypot(quad[1][0] - quad[0][0], quad[1][1] - quad[0][1])
+      );
+      document.getElementById('r-size').textContent = sz + ' px';
+
+      const now = new Date();
+      document.getElementById('r-time').textContent =
+        now.toLocaleTimeString('en-GB', { hour12: false });
+
+      updateTiming(tDetect, tWarp, tTotal);
+      setStatus('Detected', 'found');
+    }
+
+    function updateTiming(tDetect, tWarp, tTotal) {
+      const fmt = v => v != null ? v.toFixed(1) + 'ms' : '—';
+      document.getElementById('t-detect').textContent = fmt(tDetect);
+      document.getElementById('t-warp').textContent = fmt(tWarp);
+      const tot = document.getElementById('t-total');
+      tot.textContent = fmt(tTotal);
+      if (tTotal != null) {
+        tot.className = 't-val ' + (tTotal < 16 ? 'accent' : '');
+      }
+    }
+
+    function setStatus(text, state) {
+      document.getElementById('status-text').textContent = text;
+      const dot = document.getElementById('status-dot');
+      dot.className = 'status-dot ' + state;
+      // Use id not class for the dot
+      dot.id = 'status-dot';
+      dot.style.background =
+        state === 'found' ? 'var(--accent)' :
+          state === 'scanning' ? 'var(--amber)' : 'var(--text-muted)';
+      dot.style.animation =
+        state === 'scanning' ? 'pulse 1.2s ease-in-out infinite' : 'none';
+    }
+
+    // ─────────────────────────────────────────────
+    // BOOT
+    // ─────────────────────────────────────────────
+    startCamera();
+  </script>
+</body>
+
+</html>
