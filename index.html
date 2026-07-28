@@ -631,10 +631,45 @@ function loop(ts) {
 
   // Scale corners back to video coords
   const isc=1/sc;
-  const tl={x:corners.topLeft.getX()*isc,     y:corners.topLeft.getY()*isc};
-  const tr={x:corners.topRight.getX()*isc,    y:corners.topRight.getY()*isc};
-  const br={x:corners.bottomRight.getX()*isc, y:corners.bottomRight.getY()*isc};
-  const bl={x:corners.bottomLeft.getX()*isc,  y:corners.bottomLeft.getY()*isc};
+  let tl={x:corners.topLeft.getX()*isc,     y:corners.topLeft.getY()*isc};
+  let tr={x:corners.topRight.getX()*isc,    y:corners.topRight.getY()*isc};
+  let br={x:corners.bottomRight.getX()*isc, y:corners.bottomRight.getY()*isc};
+  let bl={x:corners.bottomLeft.getX()*isc,  y:corners.bottomLeft.getY()*isc};
+
+  // ZXing finds the INNER white rectangle. Expand outward to include the border.
+  // Border thickness = ~3% of detected inner size on each side.
+  const detectedW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
+  const detectedH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
+  // Use average size for expansion
+  const avgSz = (detectedW + detectedH) / 2;
+  const expand = avgSz * 0.06; // 6% = 3% border + 3% quiet zone each side
+
+  // Compute center of quad
+  const cx = (tl.x+tr.x+br.x+bl.x)/4;
+  const cy = (tl.y+tr.y+br.y+bl.y)/4;
+
+  // Expand each corner away from center
+  function expandPt(p) {
+    const dx=p.x-cx, dy=p.y-cy;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    if(dist<1) return p;
+    return { x: p.x + (dx/dist)*expand, y: p.y + (dy/dist)*expand };
+  }
+  tl=expandPt(tl); tr=expandPt(tr); br=expandPt(br); bl=expandPt(bl);
+
+  // Force square: use the average of width and height as the side length
+  // Recompute corners from center with equal sides
+  const sideW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
+  const sideH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
+  const side  = (sideW + sideH) / 2;
+
+  // Unit vectors along top edge and left edge
+  const topDx=(tr.x-tl.x)/sideW, topDy=(tr.y-tl.y)/sideW;
+  const leftDx=(bl.x-tl.x)/sideH, leftDy=(bl.y-tl.y)/sideH;
+  // Recompute all 4 corners from TL using equal side length
+  tr = { x: tl.x + topDx*side,  y: tl.y + topDy*side  };
+  bl = { x: tl.x + leftDx*side, y: tl.y + leftDy*side };
+  br = { x: tl.x + topDx*side + leftDx*side, y: tl.y + topDy*side + leftDy*side };
 
   // Draw overlay on screen
   const dsx=cr.width/vw, dsy=cr.height/vh;
