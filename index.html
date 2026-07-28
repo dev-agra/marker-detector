@@ -60,12 +60,26 @@
   .iv.g { color:var(--accent); }
 
   #proc-c { display:none; }
+
+  #debug-panel { border-top:1px solid var(--border); padding:10px 16px 14px; }
+  #debug-panel-header { display:flex; justify-content:space-between; align-items:center;
+    font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px;
+    margin-bottom:8px; }
+  #debug-legend { display:flex; gap:10px; text-transform:none; letter-spacing:0; }
+  .lg { display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text); }
+  .sw { width:10px; height:10px; border-radius:2px; display:inline-block; }
+  .sw.solid { background:#00e5a0; }
+  .sw.alt   { background:#3ea6ff; }
+  .sw.bad   { background:#ff4444; }
+  #debug-canvas { width:100%; max-width:300px; aspect-ratio:1; background:#000;
+    border:1px solid var(--border); border-radius:6px; image-rendering:pixelated;
+    display:block; margin:0 auto; }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v11</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v13</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -100,6 +114,18 @@
         <div class="ir"><span class="il">Captured</span><span class="iv" id="i-time">—</span></div>
       </div>
     </div>
+  </div>
+
+  <div id="debug-panel">
+    <div id="debug-panel-header">
+      <span>Debug view</span>
+      <span id="debug-legend">
+        <span class="lg"><span class="sw solid"></span>solid</span>
+        <span class="lg"><span class="sw alt"></span>alternating</span>
+        <span class="lg"><span class="sw bad"></span>other/empty</span>
+      </span>
+    </div>
+    <canvas id="debug-canvas" width="300" height="300"></canvas>
   </div>
 </div>
 <canvas id="proc-c"></canvas>
@@ -551,6 +577,8 @@ const procC   = document.getElementById('proc-c');
 const pCtx    = procC.getContext('2d', { willReadFrequently: true });
 const cropC   = document.getElementById('crop-canvas');
 const cCtx    = cropC.getContext('2d');
+const debugC  = document.getElementById('debug-canvas');
+const dCtx    = debugC.getContext('2d');
 
 const PROC_W=480, PROC_H=270, OUT_SZ=200;
 procC.width=PROC_W; procC.height=PROC_H;
@@ -641,24 +669,35 @@ function loop(ts) {
   // region, purely to determine orientation (which corner is TL).
 
   function findBoundingBox(bitmat, w, h) {
+    // Restrict the scan to the guide-box region (center ~70% of frame).
+    // Without this, partial markers or clutter visible at the frame edges
+    // (e.g. neighboring markers on a printed sheet) contribute to the row/
+    // column sums and skew the detected shape — this was the root cause
+    // of the "135x253" wrong-shape rejection: content outside the intended
+    // marker was inflating row density for rows that shouldn't count.
+    const margin = 0.15; // exclude outer 15% on each side
+    const x0 = Math.round(w*margin), x1 = Math.round(w*(1-margin));
+    const y0 = Math.round(h*margin), y1 = Math.round(h*(1-margin));
+
     const rowSum = new Int32Array(h);
     const colSum = new Int32Array(w);
-    for (let y=0; y<h; y++)
-      for (let x=0; x<w; x++)
+    for (let y=y0; y<y1; y++)
+      for (let x=x0; x<x1; x++)
         if (bitmat.get(x,y)) { rowSum[y]++; colSum[x]++; }
     let maxRow=0, maxCol=0;
-    for (let i=0;i<h;i++) if(rowSum[i]>maxRow) maxRow=rowSum[i];
-    for (let i=0;i<w;i++) if(colSum[i]>maxCol) maxCol=colSum[i];
+    for (let i=y0;i<y1;i++) if(rowSum[i]>maxRow) maxRow=rowSum[i];
+    for (let i=x0;i<x1;i++) if(colSum[i]>maxCol) maxCol=colSum[i];
     const rowThresh = maxRow * 0.15;
     const colThresh = maxCol * 0.15;
     let top=-1, bottom=-1, left=-1, right=-1;
-    for (let y=0;y<h;y++) if(rowSum[y]>=rowThresh){ if(top<0) top=y; bottom=y; }
-    for (let x=0;x<w;x++) if(colSum[x]>=colThresh){ if(left<0) left=x; right=x; }
+    for (let y=y0;y<y1;y++) if(rowSum[y]>=rowThresh){ if(top<0) top=y; bottom=y; }
+    for (let x=x0;x<x1;x++) if(colSum[x]>=colThresh){ if(left<0) left=x; right=x; }
     return {left, right, top, bottom};
   }
 
   const bbox = findBoundingBox(bitmat, sw, sh);
   if (bbox.left<0 || bbox.right<0 || bbox.top<0 || bbox.bottom<0) {
+    drawDebugPanel(bitmat, sw, sh, null, null, null, false);
     dbg('No marker-like region found');
     missCount++;
     if (missCount>5) clearResult();
@@ -671,6 +710,7 @@ function loop(ts) {
 
   // Reject false positives: too small, too large, or not roughly square
   if (qW < sw*0.10 || qW > sw*0.90 || qH < sh*0.10 || qH > sh*0.90) {
+    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
     dbg('Rejected — size out of range ('+qW+'x'+qH+')');
     missCount++;
     if (missCount>5) clearResult();
@@ -679,7 +719,74 @@ function loop(ts) {
   }
   const aspect = qW/qH;
   if (aspect < 0.7 || aspect > 1.43) {
+    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
     dbg('Rejected — not square (aspect='+aspect.toFixed(2)+')');
+    missCount++;
+    if (missCount>5) clearResult();
+    setTime('t1',performance.now()-t1);
+    return;
+  }
+
+  // ── STRUCTURAL SIGNATURE CHECK ──
+  // Generic size/aspect checks alone accept ANY square high-contrast blob
+  // (bookshelves, laptops, clutter all pass those). This marker has a very
+  // specific signature: 2 sides with ONE continuous solid black run
+  // (the L-border), and 2 sides with MULTIPLE similar-sized black segments
+  // (the timing-strip dots) — OR all 4 sides solid for uniform-border
+  // designs. Real-world background clutter essentially never reproduces
+  // this exact combination. Verified: real marker (both full-scale and
+  // tiny/phone-scale) → passes; random noise/clutter → fails.
+  function analyzeEdgeLine(x1,y1,x2,y2) {
+    const steps = Math.max(Math.abs(x2-x1), Math.abs(y2-y1));
+    const segs = []; let inBlack=false, runStart=0;
+    for (let i=0;i<=steps;i++) {
+      const x=Math.round(x1+(x2-x1)*i/steps), y=Math.round(y1+(y2-y1)*i/steps);
+      const black=bitmat.get(x,y);
+      if (black && !inBlack) { runStart=i; inBlack=true; }
+      if (!black && inBlack) { segs.push(i-runStart); inBlack=false; }
+    }
+    if (inBlack) segs.push(steps-runStart);
+    return segs;
+  }
+  function classifyEdgeSegs(segs, edgeLen) {
+    if (segs.length===0) return 'empty';
+    const cov = segs.reduce((a,b)=>a+b,0)/edgeLen;
+    if (segs.length<=2 && cov>0.80) return 'solid';
+    if (segs.length>=3 && cov>0.25 && cov<0.85) return 'alternating';
+    return 'other';
+  }
+
+  const sigInset = Math.max(3, Math.round(Math.min(qW,qH) * 0.07));
+  const il=bbox.left+sigInset, ir=bbox.right-sigInset;
+  const it=bbox.top+sigInset,  ib=bbox.bottom-sigInset;
+  let isMarkerLike = false;
+  if (ir>il && ib>it) {
+    const hLen=ir-il, vLen=ib-it;
+    const cTop    = classifyEdgeSegs(analyzeEdgeLine(il,it,ir,it), hLen);
+    const cBottom = classifyEdgeSegs(analyzeEdgeLine(il,ib,ir,ib), hLen);
+    const cLeft   = classifyEdgeSegs(analyzeEdgeLine(il,it,il,ib), vLen);
+    const cRight  = classifyEdgeSegs(analyzeEdgeLine(ir,it,ir,ib), vLen);
+    const classes = [cTop,cBottom,cLeft,cRight];
+    const solidCount = classes.filter(c=>c==='solid').length;
+    const altCount = classes.filter(c=>c==='alternating').length;
+    const emptyCount = classes.filter(c=>c==='empty').length;
+    isMarkerLike = emptyCount===0 && ((solidCount>=2 && altCount>=1) || solidCount>=3);
+
+    // Always render the debug panel — shows exactly what the algorithm
+    // is seeing and why it accepted/rejected, regardless of outcome.
+    drawDebugPanel(bitmat, sw, sh, bbox, {top:cTop,bottom:cBottom,left:cLeft,right:cRight},
+                    {il,it,ir,ib}, isMarkerLike);
+
+    if (!isMarkerLike) {
+      dbg('Rejected — no border signature (top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight+')');
+      missCount++;
+      if (missCount>5) clearResult();
+      setTime('t1',performance.now()-t1);
+      return;
+    }
+  } else {
+    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
+    dbg('Rejected — too small for signature check');
     missCount++;
     if (missCount>5) clearResult();
     setTime('t1',performance.now()-t1);
@@ -801,6 +908,77 @@ function setTime(id, ms) {
 
 function dbg(msg) { document.getElementById('dbg').textContent=msg; }
 function fmt(rp) { return Math.round(rp.getX())+','+Math.round(rp.getY()); }
+
+// ═══════════════════════════════════════════════════════
+// DEBUG VISUALIZATION — shows the actual binarized frame,
+// detected bbox, and the 4 edge classification lines
+// (solid=green, alternating=blue, other/empty=red)
+// ═══════════════════════════════════════════════════════
+function drawDebugPanel(bitmat, w, h, bbox, edgeClasses, inset, accepted) {
+  const cw = debugC.width, ch = debugC.height;
+  dCtx.clearRect(0,0,cw,ch);
+
+  // Scale factor from bitmatrix space to canvas space
+  const scale = Math.min(cw/w, ch/h);
+  const offX = (cw - w*scale)/2, offY = (ch - h*scale)/2;
+
+  // Draw the binarized bitmap pixel-by-pixel (downsampled to canvas res)
+  const img = dCtx.createImageData(cw, ch);
+  const data = img.data;
+  for (let cy=0; cy<ch; cy++) {
+    for (let cx=0; cx<cw; cx++) {
+      const srcX = Math.floor((cx-offX)/scale);
+      const srcY = Math.floor((cy-offY)/scale);
+      const di = (cy*cw+cx)*4;
+      if (srcX>=0 && srcX<w && srcY>=0 && srcY<h) {
+        const isBlack = bitmat.get(srcX, srcY);
+        const v = isBlack ? 20 : 235;
+        data[di]=v; data[di+1]=v; data[di+2]=v; data[di+3]=255;
+      } else {
+        data[di]=10; data[di+1]=10; data[di+2]=14; data[di+3]=255;
+      }
+    }
+  }
+  dCtx.putImageData(img, 0, 0);
+
+  function toCanvas(x,y) { return [offX+x*scale, offY+y*scale]; }
+
+  // Draw bbox outline
+  if (bbox) {
+    const [x1,y1] = toCanvas(bbox.left, bbox.top);
+    const [x2,y2] = toCanvas(bbox.right, bbox.bottom);
+    dCtx.strokeStyle = accepted ? '#00e5a0' : 'rgba(255,255,255,0.4)';
+    dCtx.lineWidth = 1.5;
+    dCtx.setLineDash([4,3]);
+    dCtx.strokeRect(x1, y1, x2-x1, y2-y1);
+    dCtx.setLineDash([]);
+  }
+
+  // Draw the 4 classified edge sample lines
+  if (bbox && edgeClasses && inset) {
+    const colorFor = c => c==='solid' ? '#00e5a0' : c==='alternating' ? '#3ea6ff' : '#ff4444';
+    const { il, it, ir, ib } = inset;
+    const lines = [
+      [il,it,ir,it, edgeClasses.top],
+      [il,ib,ir,ib, edgeClasses.bottom],
+      [il,it,il,ib, edgeClasses.left],
+      [ir,it,ir,ib, edgeClasses.right],
+    ];
+    for (const [x1,y1,x2,y2,cls] of lines) {
+      const [cx1,cy1] = toCanvas(x1,y1);
+      const [cx2,cy2] = toCanvas(x2,y2);
+      dCtx.strokeStyle = colorFor(cls);
+      dCtx.lineWidth = 3;
+      dCtx.beginPath();
+      dCtx.moveTo(cx1,cy1);
+      dCtx.lineTo(cx2,cy2);
+      dCtx.stroke();
+    }
+  }
+
+  // Border indicating overall accept/reject
+  debugC.style.borderColor = accepted ? '#00e5a0' : 'var(--border)';
+}
 
 // ── Boot ──
 startCamera();
