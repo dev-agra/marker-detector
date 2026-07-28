@@ -303,6 +303,315 @@
 <canvas id="warp-canvas"></canvas>
 
 <script>
+
+// ═══════════════════════════════════════════════════════════
+// ZXING PORT — ResultPoint, WhiteRectangleDetector, CornerDetector
+// Ported from zxing-js/library (Apache License 2.0)
+// All TypeScript removed, self-contained plain JS
+// ═══════════════════════════════════════════════════════════
+
+class ZXingNotFoundException extends Error {
+  constructor() { super('NotFoundException'); }
+}
+
+class ResultPoint {
+  constructor(x, y) { this._x = x; this._y = y; }
+  getX() { return this._x; }
+  getY() { return this._y; }
+  static distance(a, b) {
+    return Math.sqrt((a._x - b._x) ** 2 + (a._y - b._y) ** 2);
+  }
+}
+
+// MathUtils inline
+const MathUtils = {
+  round: (d) => Math.floor(d + 0.5),
+  distance: (aX, aY, bX, bY) => Math.sqrt((aX - bX) ** 2 + (aY - bY) ** 2),
+};
+
+class WhiteRectangleDetector {
+  static INIT_SIZE = 10;
+  static CORR = 1;
+
+  constructor(image, initSize, x, y) {
+    this.image = image;
+    this.height = image.getHeight();
+    this.width  = image.getWidth();
+    if (initSize == null) initSize = WhiteRectangleDetector.INIT_SIZE;
+    if (x == null) x = (image.getWidth()  / 2) | 0;
+    if (y == null) y = (image.getHeight() / 2) | 0;
+    const halfsize = (initSize / 2) | 0;
+    this.leftInit  = x - halfsize;
+    this.rightInit = x + halfsize;
+    this.upInit    = y - halfsize;
+    this.downInit  = y + halfsize;
+    if (this.upInit < 0 || this.leftInit < 0 ||
+        this.downInit >= this.height || this.rightInit >= this.width) {
+      throw new ZXingNotFoundException();
+    }
+  }
+
+  detect() {
+    let left = this.leftInit, right = this.rightInit;
+    let up   = this.upInit,   down  = this.downInit;
+    let sizeExceeded = false;
+    let aBlackPointFoundOnBorder = true;
+    let atLeastOneBlackPointFoundOnBorder = false;
+    let atLeastOneBlackPointFoundOnRight  = false;
+    let atLeastOneBlackPointFoundOnBottom = false;
+    let atLeastOneBlackPointFoundOnLeft   = false;
+    let atLeastOneBlackPointFoundOnTop    = false;
+    const { width, height } = this;
+
+    while (aBlackPointFoundOnBorder) {
+      aBlackPointFoundOnBorder = false;
+
+      let rightBorderNotWhite = true;
+      while ((rightBorderNotWhite || !atLeastOneBlackPointFoundOnRight) && right < width) {
+        rightBorderNotWhite = this.containsBlackPoint(up, down, right, false);
+        if (rightBorderNotWhite) { right++; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnRight = true; }
+        else if (!atLeastOneBlackPointFoundOnRight) right++;
+      }
+      if (right >= width) { sizeExceeded = true; break; }
+
+      let bottomBorderNotWhite = true;
+      while ((bottomBorderNotWhite || !atLeastOneBlackPointFoundOnBottom) && down < height) {
+        bottomBorderNotWhite = this.containsBlackPoint(left, right, down, true);
+        if (bottomBorderNotWhite) { down++; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnBottom = true; }
+        else if (!atLeastOneBlackPointFoundOnBottom) down++;
+      }
+      if (down >= height) { sizeExceeded = true; break; }
+
+      let leftBorderNotWhite = true;
+      while ((leftBorderNotWhite || !atLeastOneBlackPointFoundOnLeft) && left >= 0) {
+        leftBorderNotWhite = this.containsBlackPoint(up, down, left, false);
+        if (leftBorderNotWhite) { left--; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnLeft = true; }
+        else if (!atLeastOneBlackPointFoundOnLeft) left--;
+      }
+      if (left < 0) { sizeExceeded = true; break; }
+
+      let topBorderNotWhite = true;
+      while ((topBorderNotWhite || !atLeastOneBlackPointFoundOnTop) && up >= 0) {
+        topBorderNotWhite = this.containsBlackPoint(left, right, up, true);
+        if (topBorderNotWhite) { up--; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnTop = true; }
+        else if (!atLeastOneBlackPointFoundOnTop) up--;
+      }
+      if (up < 0) { sizeExceeded = true; break; }
+
+      if (aBlackPointFoundOnBorder) atLeastOneBlackPointFoundOnBorder = true;
+    }
+
+    if (!sizeExceeded && atLeastOneBlackPointFoundOnBorder) {
+      const maxSize = right - left;
+      let z = null;
+      for (let i = 1; z === null && i < maxSize; i++)
+        z = this.getBlackPointOnSegment(left, down - i, left + i, down);
+      if (z == null) throw new ZXingNotFoundException();
+
+      let t = null;
+      for (let i = 1; t === null && i < maxSize; i++)
+        t = this.getBlackPointOnSegment(left, up + i, left + i, up);
+      if (t == null) throw new ZXingNotFoundException();
+
+      let x = null;
+      for (let i = 1; x === null && i < maxSize; i++)
+        x = this.getBlackPointOnSegment(right, up + i, right - i, up);
+      if (x == null) throw new ZXingNotFoundException();
+
+      let y = null;
+      for (let i = 1; y === null && i < maxSize; i++)
+        y = this.getBlackPointOnSegment(right, down - i, right - i, down);
+      if (y == null) throw new ZXingNotFoundException();
+
+      return this.centerEdges(y, z, x, t);
+    } else {
+      throw new ZXingNotFoundException();
+    }
+  }
+
+  getBlackPointOnSegment(aX, aY, bX, bY) {
+    const dist = MathUtils.round(MathUtils.distance(aX, aY, bX, bY));
+    const xStep = (bX - aX) / dist;
+    const yStep = (bY - aY) / dist;
+    for (let i = 0; i < dist; i++) {
+      const x = MathUtils.round(aX + i * xStep);
+      const y = MathUtils.round(aY + i * yStep);
+      if (this.image.get(x, y)) return new ResultPoint(x, y);
+    }
+    return null;
+  }
+
+  centerEdges(y, z, x, t) {
+    const yi = y.getX(), yj = y.getY();
+    const zi = z.getX(), zj = z.getY();
+    const xi = x.getX(), xj = x.getY();
+    const ti = t.getX(), tj = t.getY();
+    const C = WhiteRectangleDetector.CORR;
+    if (yi < this.width / 2.0) {
+      return [new ResultPoint(ti - C, tj + C), new ResultPoint(zi + C, zj + C),
+              new ResultPoint(xi - C, xj - C), new ResultPoint(yi + C, yj - C)];
+    } else {
+      return [new ResultPoint(ti + C, tj + C), new ResultPoint(zi + C, zj - C),
+              new ResultPoint(xi - C, xj + C), new ResultPoint(yi - C, yj - C)];
+    }
+  }
+
+  containsBlackPoint(a, b, fixed, horizontal) {
+    if (horizontal) {
+      for (let x = a; x <= b; x++) if (this.image.get(x, fixed)) return true;
+    } else {
+      for (let y = a; y <= b; y++) if (this.image.get(fixed, y)) return true;
+    }
+    return false;
+  }
+}
+
+class CornerDetector {
+  constructor(image) {
+    this.image = image;
+    this.rectangleDetector = new WhiteRectangleDetector(image);
+  }
+
+  detectCorners() {
+    const cornerPoints = this.rectangleDetector.detect();
+    let points = this.detectSolid1(cornerPoints);
+    points = this.detectSolid2(points);
+    points[3] = this.correctTopRight(points);
+    if (!points[3]) throw new ZXingNotFoundException();
+    points = this.shiftToModuleCenter(points);
+    return points; // [topLeft, bottomLeft, bottomRight, topRight]
+  }
+
+  static shiftPoint(point, to, div) {
+    const x = (to.getX() - point.getX()) / (div + 1);
+    const y = (to.getY() - point.getY()) / (div + 1);
+    return new ResultPoint(point.getX() + x, point.getY() + y);
+  }
+
+  static moveAway(point, fromX, fromY) {
+    let x = point.getX(), y = point.getY();
+    if (x < fromX) x -= 1; else x += 1;
+    if (y < fromY) y -= 1; else y += 1;
+    return new ResultPoint(x, y);
+  }
+
+  detectSolid1(cornerPoints) {
+    let pA = cornerPoints[0], pB = cornerPoints[1];
+    let pC = cornerPoints[3], pD = cornerPoints[2];
+    const trAB = this.transitionsBetween(pA, pB);
+    const trBC = this.transitionsBetween(pB, pC);
+    const trCD = this.transitionsBetween(pC, pD);
+    const trDA = this.transitionsBetween(pD, pA);
+    let min = trAB;
+    let points = [pD, pA, pB, pC];
+    if (min > trBC) { min = trBC; points = [pA, pB, pC, pD]; }
+    if (min > trCD) { min = trCD; points = [pB, pC, pD, pA]; }
+    if (min > trDA) {             points = [pC, pD, pA, pB]; }
+    return points;
+  }
+
+  detectSolid2(points) {
+    let [pA, pB, pC, pD] = points;
+    const tr = this.transitionsBetween(pA, pD);
+    const pBs = CornerDetector.shiftPoint(pB, pC, (tr + 1) * 4);
+    const pCs = CornerDetector.shiftPoint(pC, pB, (tr + 1) * 4);
+    const trBA = this.transitionsBetween(pBs, pA);
+    const trCD = this.transitionsBetween(pCs, pD);
+    if (trBA < trCD) return [pA, pB, pC, pD];
+    else             return [pB, pC, pD, pA];
+  }
+
+  correctTopRight(points) {
+    let [pA, pB, pC, pD] = points;
+    let trTop  = this.transitionsBetween(pA, pD);
+    let trRight = this.transitionsBetween(pB, pD);
+    const pAs = CornerDetector.shiftPoint(pA, pB, (trRight + 1) * 4);
+    const pCs = CornerDetector.shiftPoint(pC, pB, (trTop   + 1) * 4);
+    trTop  = this.transitionsBetween(pAs, pD);
+    trRight = this.transitionsBetween(pCs, pD);
+    const c1 = new ResultPoint(pD.getX() + (pC.getX() - pB.getX()) / (trTop   + 1),
+                                pD.getY() + (pC.getY() - pB.getY()) / (trTop   + 1));
+    const c2 = new ResultPoint(pD.getX() + (pA.getX() - pB.getX()) / (trRight + 1),
+                                pD.getY() + (pA.getY() - pB.getY()) / (trRight + 1));
+    const v1 = this.isValid(c1), v2 = this.isValid(c2);
+    if (!v1 && !v2) return null;
+    if (!v1) return c2;
+    if (!v2) return c1;
+    const s1 = this.transitionsBetween(pAs, c1) + this.transitionsBetween(pCs, c1);
+    const s2 = this.transitionsBetween(pAs, c2) + this.transitionsBetween(pCs, c2);
+    return s1 > s2 ? c1 : c2;
+  }
+
+  shiftToModuleCenter(points) {
+    let [pA, pB, pC, pD] = points;
+    let dimH = this.transitionsBetween(pA, pD) + 1;
+    let dimV = this.transitionsBetween(pC, pD) + 1;
+    let pAs = CornerDetector.shiftPoint(pA, pB, dimV * 4);
+    let pCs = CornerDetector.shiftPoint(pC, pB, dimH * 4);
+    dimH = this.transitionsBetween(pAs, pD) + 1;
+    dimV = this.transitionsBetween(pCs, pD) + 1;
+    if (dimH & 1) dimH++;
+    if (dimV & 1) dimV++;
+    const cx = (pA.getX() + pB.getX() + pC.getX() + pD.getX()) / 4;
+    const cy = (pA.getY() + pB.getY() + pC.getY() + pD.getY()) / 4;
+    pA = CornerDetector.moveAway(pA, cx, cy);
+    pB = CornerDetector.moveAway(pB, cx, cy);
+    pC = CornerDetector.moveAway(pC, cx, cy);
+    pD = CornerDetector.moveAway(pD, cx, cy);
+    pAs = CornerDetector.shiftPoint(pA,  pB, dimV * 4);
+    pAs = CornerDetector.shiftPoint(pAs, pD, dimH * 4);
+    const pBs = CornerDetector.shiftPoint(CornerDetector.shiftPoint(pB, pA, dimV * 4), pC, dimH * 4);
+    pCs = CornerDetector.shiftPoint(pC,  pD, dimV * 4);
+    pCs = CornerDetector.shiftPoint(pCs, pB, dimH * 4);
+    const pDs = CornerDetector.shiftPoint(CornerDetector.shiftPoint(pD, pC, dimV * 4), pA, dimH * 4);
+    return [pAs, pBs, pCs, pDs];
+  }
+
+  isValid(p) {
+    return p.getX() >= 0 && p.getX() < this.image.getWidth() &&
+           p.getY() >  0 && p.getY() < this.image.getHeight();
+  }
+
+  transitionsBetween(from, to) {
+    let fromX = Math.trunc(from.getX()), fromY = Math.trunc(from.getY());
+    let toX   = Math.trunc(to.getX()),   toY   = Math.trunc(to.getY());
+    let steep = Math.abs(toY - fromY) > Math.abs(toX - fromX);
+    if (steep) {
+      [fromX, fromY] = [fromY, fromX];
+      [toX,   toY  ] = [toY,   toX  ];
+    }
+    const dx = Math.abs(toX - fromX), dy = Math.abs(toY - fromY);
+    let error = -dx / 2;
+    const ystep = fromY < toY ? 1 : -1;
+    const xstep = fromX < toX ? 1 : -1;
+    let transitions = 0;
+    let inBlack = this.image.get(steep ? fromY : fromX, steep ? fromX : fromY);
+    for (let x = fromX, y = fromY; x !== toX; x += xstep) {
+      const isBlack = this.image.get(steep ? y : x, steep ? x : y);
+      if (isBlack !== inBlack) { transitions++; inBlack = isBlack; }
+      error += dy;
+      if (error > 0) {
+        if (y === toY) break;
+        y += ystep;
+        error -= dx;
+      }
+    }
+    return transitions;
+  }
+}
+
+// BitMatrix wrapper — converts our Uint8Array thresh into ZXing's .get(x,y) interface
+function makeBitMatrix(thresh, w, h) {
+  return {
+    getWidth()  { return w; },
+    getHeight() { return h; },
+    get(x, y) {
+      if (x < 0 || x >= w || y < 0 || y >= h) return false;
+      return thresh[y * w + x] === 0; // true = black
+    }
+  };
+}
+
 // ─────────────────────────────────────────────
 // MARKER GEOMETRY (from actual marker analysis)
 // All as fractions of marker width
@@ -672,44 +981,66 @@ function sampleRect(thresh, w, x, y, rw, rh) {
 // ─────────────────────────────────────────────
 
 function warpAndOrient(videoEl, quad, vw, vh) {
-  // Draw full-res video to warp canvas using perspective correction
-  // We use a simple affine crop since our quad is axis-aligned from scanlines
-  // For a proper perspective warp we use the homography approach
-
-  const [tl, tr, br, bl] = quad;
-
-  // Compute homography and warp
-  const H = computeHomography(
-    tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1],
-    0, 0, WARP_SZ, 0, WARP_SZ, WARP_SZ, 0, WARP_SZ
-  );
-
-  // Sample the full video into warp canvas pixel by pixel using inverse H
+  // ── Step 1: Draw full-res frame to a temp canvas for ZXing ──
   wCtx.drawImage(videoEl, 0, 0, vw, vh, 0, 0, WARP_SZ, WARP_SZ);
-  const srcData = wCtx.getImageData(0, 0, WARP_SZ, WARP_SZ);
+  const scaleX = WARP_SZ / vw, scaleY = WARP_SZ / vh;
 
-  // Fast warp using canvas drawImage with clipping transform
-  // For axis-aligned quads (our scanline detection gives bounding box),
-  // use a simpler crop + scale approach with bilinear filtering from the browser
-  const quadW = Math.hypot(tr[0]-tl[0], tr[1]-tl[1]);
-  const quadH = Math.hypot(bl[0]-tl[0], bl[1]-tl[1]);
+  // Scale the rough scanline quad down to WARP_SZ coords
+  // Use the scanline quad center + 30% padding to define ZXing's search region
+  const xs = quad.map(p => p[0] * scaleX), ys = quad.map(p => p[1] * scaleY);
+  const qx1 = Math.max(0, Math.min(...xs) - 10);
+  const qy1 = Math.max(0, Math.min(...ys) - 10);
+  const qx2 = Math.min(WARP_SZ, Math.max(...xs) + 10);
+  const qy2 = Math.min(WARP_SZ, Math.max(...ys) + 10);
+  const qcx = ((qx1 + qx2) / 2) | 0;
+  const qcy = ((qy1 + qy2) / 2) | 0;
+  const qsz = Math.max(qx2 - qx1, qy2 - qy1);
 
-  // Create offscreen canvas at exact quad pixel count
-  const off = new OffscreenCanvas ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
-                                  : document.createElement('canvas');
-  off.width = off.height = WARP_SZ;
+  // ── Step 2: Get pixel data and build BitMatrix for ZXing ──
+  const frameData = wCtx.getImageData(0, 0, WARP_SZ, WARP_SZ);
+  const frameGrey = toGreyscale(frameData);
+  const frameThresh = adaptiveThreshold(frameGrey, WARP_SZ, WARP_SZ, 21, 4);
+  const bitMatrix = makeBitMatrix(frameThresh, WARP_SZ, WARP_SZ);
+
+  // ── Step 3: Run ZXing CornerDetector centered on our rough quad ──
+  let corners = null;
+  try {
+    const detector = new CornerDetector(bitMatrix);
+    // Override the WhiteRectangleDetector to start near our quad center
+    detector.rectangleDetector = new WhiteRectangleDetector(bitMatrix, qsz | 0, qcx, qcy);
+    const pts = detector.detectCorners();
+    // pts = [topLeft, bottomLeft, bottomRight, topRight] in WARP_SZ coords
+    corners = [
+      [pts[0].getX(), pts[0].getY()], // TL
+      [pts[3].getX(), pts[3].getY()], // TR
+      [pts[2].getX(), pts[2].getY()], // BR
+      [pts[1].getX(), pts[1].getY()], // BL
+    ];
+    dbg('ZXing corners: TL=('+Math.round(corners[0][0])+','+Math.round(corners[0][1])+')');
+  } catch(e) {
+    // ZXing failed — fall back to scanline bounding box
+    dbg('ZXing fallback: '+e.message);
+    corners = quad.map(([x, y]) => [x * scaleX, y * scaleY]);
+  }
+
+  // ── Step 4: Perspective warp using ZXing corners ──
+  const [tl, tr, br, bl] = corners;
+  const off = (typeof OffscreenCanvas !== 'undefined')
+    ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
+    : (() => { const c = document.createElement('canvas'); c.width = c.height = WARP_SZ; return c; })();
   const offCtx = off.getContext('2d');
 
-  // Use canvas transform to warp quad to square
-  offCtx.save();
-  const scaleX = WARP_SZ / quadW;
-  const scaleY = WARP_SZ / quadH;
-  offCtx.scale(scaleX, scaleY);
-  offCtx.drawImage(videoEl,
-    tl[0], tl[1], quadW, quadH,
-    0, 0, quadW, quadH
-  );
-  offCtx.restore();
+  // Use canvas perspective transform via setTransform with homography
+  const H = solveHomographyForCanvas(tl, tr, br, bl, WARP_SZ);
+  if (H) {
+    // Warp by drawing each scanline using the inverse homography
+    perspectiveWarp(offCtx, wCtx.canvas || warpCanvas, H, WARP_SZ);
+  } else {
+    // Simple affine fallback
+    const qW = Math.hypot(tr[0]-tl[0], tr[1]-tl[1]);
+    const qH = Math.hypot(bl[0]-tl[0], bl[1]-tl[1]);
+    offCtx.drawImage(warpCanvas, tl[0], tl[1], qW, qH, 0, 0, WARP_SZ, WARP_SZ);
+  }
 
   // ── Orientation detection ──
   // Sample the four inner corners after warp
@@ -783,30 +1114,38 @@ function getOrientationConfidence(imageData, sz, rotation) {
   return Math.min(100, Math.round(gap * 200));
 }
 
-// Compute 3x3 homography from 4 point correspondences (DLT)
-function computeHomography(x1,y1,x2,y2,x3,y3,x4,y4, u1,v1,u2,v2,u3,v3,u4,v4) {
-  // Build 8x9 matrix A for DLT
+// computeHomography replaced by ZXing-based warp above
+
+
+// ─────────────────────────────────────────────
+// PERSPECTIVE WARP (scanline inverse homography)
+// ─────────────────────────────────────────────
+
+function solveHomographyForCanvas(tl, tr, br, bl, sz) {
+  // Compute H that maps [tl,tr,br,bl] -> [0,0],[sz,0],[sz,sz],[0,sz]
+  // Using DLT (Direct Linear Transform)
+  const srcPts = [tl, tr, br, bl];
+  const dstPts = [[0,0],[sz,0],[sz,sz],[0,sz]];
   const A = [];
-  const pts = [[x1,y1,u1,v1],[x2,y2,u2,v2],[x3,y3,u3,v3],[x4,y4,u4,v4]];
-  for (const [x,y,u,v] of pts) {
-    A.push([-x,-y,-1, 0, 0, 0, u*x, u*y, u]);
-    A.push([ 0, 0, 0,-x,-y,-1, v*x, v*y, v]);
+  for (let i = 0; i < 4; i++) {
+    const [sx, sy] = srcPts[i], [dx, dy] = dstPts[i];
+    A.push([-sx,-sy,-1, 0,  0,  0, dx*sx, dx*sy, dx]);
+    A.push([ 0,  0,  0,-sx,-sy,-1, dy*sx, dy*sy, dy]);
   }
-  // Solve via Gaussian elimination (simplified for 8x9)
-  const h = gaussianElimination(A);
-  return h;
+  const h = gaussElim(A);
+  if (!h) return null;
+  return [h[0],h[1],h[2], h[3],h[4],h[5], h[6],h[7],1];
 }
 
-function gaussianElimination(A) {
+function gaussElim(A) {
   const n = A.length;
   for (let col = 0; col < n; col++) {
-    // Pivot
     let maxRow = col;
     for (let r = col+1; r < n; r++)
       if (Math.abs(A[r][col]) > Math.abs(A[maxRow][col])) maxRow = r;
     [A[col], A[maxRow]] = [A[maxRow], A[col]];
     const piv = A[col][col];
-    if (Math.abs(piv) < 1e-10) continue;
+    if (Math.abs(piv) < 1e-10) return null;
     for (let r = 0; r < n; r++) {
       if (r === col) continue;
       const f = A[r][col] / piv;
@@ -815,6 +1154,53 @@ function gaussianElimination(A) {
     for (let c = col; c <= n; c++) A[col][c] /= piv;
   }
   return A.map(r => r[n]);
+}
+
+function perspectiveWarp(dstCtx, srcCanvas, H, sz) {
+  // H maps src -> dst. We need inv(H) to map dst pixel -> src pixel
+  // Compute inverse of 3x3 H
+  const [h0,h1,h2,h3,h4,h5,h6,h7,h8] = H;
+  const det = h0*(h4*h8-h5*h7) - h1*(h3*h8-h5*h6) + h2*(h3*h7-h4*h6);
+  if (Math.abs(det) < 1e-10) {
+    // degenerate — fallback simple draw
+    dstCtx.drawImage(srcCanvas, 0, 0, sz, sz);
+    return;
+  }
+  const inv = [
+    (h4*h8-h5*h7)/det, (h2*h7-h1*h8)/det, (h1*h5-h2*h4)/det,
+    (h5*h6-h3*h8)/det, (h0*h8-h2*h6)/det, (h2*h3-h0*h5)/det,
+    (h3*h7-h4*h6)/det, (h1*h6-h0*h7)/det, (h0*h4-h1*h3)/det,
+  ];
+
+  // Draw row by row using ctx.setTransform for each strip — efficient enough for WARP_SZ
+  // Actually use getImageData/putImageData for pixel-perfect warp
+  const src = dstCtx.canvas; // won't work — we need srcCanvas pixels
+  // Get source pixels once
+  const tmpCtx = warpCanvas.getContext('2d', {willReadFrequently: true});
+  const srcData = tmpCtx.getImageData(0, 0, sz, sz);
+  const sd = srcData.data;
+
+  const dstData = dstCtx.createImageData(sz, sz);
+  const dd = dstData.data;
+
+  for (let dy = 0; dy < sz; dy++) {
+    for (let dx = 0; dx < sz; dx++) {
+      // Map (dx,dy) in dst back to src using inv(H)
+      const w2 = inv[6]*dx + inv[7]*dy + inv[8];
+      const sx = (inv[0]*dx + inv[1]*dy + inv[2]) / w2;
+      const sy = (inv[3]*dx + inv[4]*dy + inv[5]) / w2;
+      const six = Math.round(sx), siy = Math.round(sy);
+      if (six >= 0 && six < sz && siy >= 0 && siy < sz) {
+        const si = (siy * sz + six) * 4;
+        const di = (dy  * sz + dx)  * 4;
+        dd[di]   = sd[si];
+        dd[di+1] = sd[si+1];
+        dd[di+2] = sd[si+2];
+        dd[di+3] = 255;
+      }
+    }
+  }
+  dstCtx.putImageData(dstData, 0, 0);
 }
 
 // ─────────────────────────────────────────────
