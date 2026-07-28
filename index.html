@@ -65,7 +65,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v9</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v11</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -598,6 +598,15 @@ function loop(ts) {
   const vw=video.videoWidth, vh=video.videoHeight;
   const t0=performance.now();
 
+  // DIAGNOSTIC: check for orientation mismatch between raw sensor frame
+  // and what's actually displayed. If videoW/H aspect ratio doesn't match
+  // the displayed cam-wrap aspect ratio, the raw frame data we process is
+  // rotated relative to what you see on screen — this breaks cropping.
+  const videoAspect = vw / vh;
+  const displayAspect = cr.width / cr.height;
+  const aspectMismatch = Math.abs(videoAspect - displayAspect) > 0.3 &&
+                          Math.abs(videoAspect - (1/displayAspect)) < 0.3;
+
   // ── 1. Downsample to PROC size ──
   const sc=Math.min(PROC_W/vw, PROC_H/vh);
   const sw=Math.round(vw*sc), sh=Math.round(vh*sc);
@@ -622,89 +631,101 @@ function loop(ts) {
   const t1=performance.now();
   setTime('t0', t1-t0);
 
-  // ── 3. ZXing DataMatrix corner detection ──
-  // WhiteRectangleDetector expands outward from a fixed center point.
-  // Anchored explicitly to the frame center (= guide box center on screen)
-  // so it always searches for the marker you're pointing at, not whatever
-  // white gap happens to be nearby when multiple markers are in view.
-  const guideCx = sw >> 1;
-  const guideCy = sh >> 1;
-  // CRITICAL FIX: initSize must be large enough to guarantee the starting
-  // search cross-section spans at least one full timing-strip dot+gap cycle.
-  // A fixed small value (e.g. 10px) can land entirely inside a gap between
-  // dots, causing the outward scan to miss the border forever and run off
-  // the frame edge. Verified empirically: 10px fails consistently, 30px+
-  // succeeds reliably. Using ~12% of the shorter frame dimension scales
-  // correctly across different marker sizes and camera distances.
-  const guideInit = Math.max(30, Math.round(Math.min(sw, sh) * 0.12));
+  // ── 3. COMBINED DETECTION ──
+  // ZXing's WhiteRectangleDetector traces exact black/white transitions,
+  // which breaks on thick blocky timing-strip dots (large gaps between
+  // large dots confuse transition-counting). A row/column density scan
+  // is far more robust for THIS marker style — it just measures how much
+  // of each row/column is black, which handles blocky borders correctly
+  // regardless of scale. ZXing is still used, but only on the cropped
+  // region, purely to determine orientation (which corner is TL).
 
-  let corners = null;
-  try {
-    const detector = new DMDetector(bitmat, guideInit, guideCx, guideCy);
-    const result   = detector.detectCorners();
-    corners = result;
-  } catch(e) {
-    dbg('ZXing: '+e.message);
+  function findBoundingBox(bitmat, w, h) {
+    const rowSum = new Int32Array(h);
+    const colSum = new Int32Array(w);
+    for (let y=0; y<h; y++)
+      for (let x=0; x<w; x++)
+        if (bitmat.get(x,y)) { rowSum[y]++; colSum[x]++; }
+    let maxRow=0, maxCol=0;
+    for (let i=0;i<h;i++) if(rowSum[i]>maxRow) maxRow=rowSum[i];
+    for (let i=0;i<w;i++) if(colSum[i]>maxCol) maxCol=colSum[i];
+    const rowThresh = maxRow * 0.15;
+    const colThresh = maxCol * 0.15;
+    let top=-1, bottom=-1, left=-1, right=-1;
+    for (let y=0;y<h;y++) if(rowSum[y]>=rowThresh){ if(top<0) top=y; bottom=y; }
+    for (let x=0;x<w;x++) if(colSum[x]>=colThresh){ if(left<0) left=x; right=x; }
+    return {left, right, top, bottom};
+  }
+
+  const bbox = findBoundingBox(bitmat, sw, sh);
+  if (bbox.left<0 || bbox.right<0 || bbox.top<0 || bbox.bottom<0) {
+    dbg('No marker-like region found');
     missCount++;
     if (missCount>5) clearResult();
     setTime('t1',performance.now()-t1);
     return;
   }
-  const t2=performance.now();
 
-  // Reject false positives: a real marker filling the guide box should be
-  // a significant fraction of the frame width. Gaps between printed markers
-  // produce much smaller quads.
-  const qW = MathUtils.distance(
-    corners.topLeft.getX(), corners.topLeft.getY(),
-    corners.topRight.getX(), corners.topRight.getY());
-  if (qW < sw * 0.15) {
-    dbg('Rejected — too small ('+qW.toFixed(0)+'px, need >'+(sw*0.15).toFixed(0)+'px). Likely gap between markers, not a marker.');
+  const qW = bbox.right - bbox.left;
+  const qH = bbox.bottom - bbox.top;
+
+  // Reject false positives: too small, too large, or not roughly square
+  if (qW < sw*0.10 || qW > sw*0.90 || qH < sh*0.10 || qH > sh*0.90) {
+    dbg('Rejected — size out of range ('+qW+'x'+qH+')');
     missCount++;
     if (missCount>5) clearResult();
+    setTime('t1',performance.now()-t1);
+    return;
+  }
+  const aspect = qW/qH;
+  if (aspect < 0.7 || aspect > 1.43) {
+    dbg('Rejected — not square (aspect='+aspect.toFixed(2)+')');
+    missCount++;
+    if (missCount>5) clearResult();
+    setTime('t1',performance.now()-t1);
     return;
   }
 
+  const t2=performance.now();
   missCount=0;
   setTime('t1', t2-t1);
-  dbg('Found — TL=('+fmt(corners.topLeft)+') TR=('+fmt(corners.topRight)+') w='+qW.toFixed(0)+'px');
 
-  // ── Everything happens in the SAME downsampled coordinate space ──
-  // (sw x sh) — no second video capture, no coordinate translation drift.
-  let tl={x:corners.topLeft.getX(),     y:corners.topLeft.getY()};
-  let tr={x:corners.topRight.getX(),    y:corners.topRight.getY()};
-  let br={x:corners.bottomRight.getX(), y:corners.bottomRight.getY()};
-  let bl={x:corners.bottomLeft.getX(),  y:corners.bottomLeft.getY()};
+  // Default axis-aligned corners from the bounding box
+  let tl={x:bbox.left,  y:bbox.top};
+  let tr={x:bbox.right, y:bbox.top};
+  let br={x:bbox.right, y:bbox.bottom};
+  let bl={x:bbox.left,  y:bbox.bottom};
 
-  // ZXing's shiftToModuleCenter() places corners at the CENTER of the
-  // outermost border module (correct for bit-sampling), not the true outer
-  // pixel edge — this clips ~2% into the border on every side. Verified
-  // empirically against real marker photos: consistent 1.6-2.5% gap on
-  // all 4 edges. Expand outward by that amount to get the true edge.
-  const detectedW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
-  const detectedH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
-  const avgSz = (detectedW + detectedH) / 2;
-  const expand = avgSz * 0.03; // measured ~2%, small safety margin to 3%
-
-  const cx = (tl.x+tr.x+br.x+bl.x)/4;
-  const cy = (tl.y+tr.y+br.y+bl.y)/4;
-
-  function expandPt(p) {
-    const dx=p.x-cx, dy=p.y-cy;
-    const dist=Math.sqrt(dx*dx+dy*dy);
-    if(dist<1) return p;
-    return { x: p.x + (dx/dist)*expand, y: p.y + (dy/dist)*expand };
+  // Try ZXing purely for orientation (which corner is the true TL) —
+  // failure here is non-fatal, we just keep default orientation.
+  let orientLabel = 'default (ZXing unavailable)';
+  try {
+    const bcx = Math.round((bbox.left+bbox.right)/2);
+    const bcy = Math.round((bbox.top+bbox.bottom)/2);
+    const gInit = Math.max(20, Math.round(qW * 0.3));
+    const zDetector = new DMDetector(bitmat, gInit, bcx, bcy);
+    const zResult = zDetector.detectCorners();
+    const ztl = {x:zResult.topLeft.getX(), y:zResult.topLeft.getY()};
+    // Find which bbox corner is nearest to ZXing's detected TL —
+    // that tells us the true rotation of the marker.
+    const bboxCorners = [
+      {x:bbox.left,  y:bbox.top,    label:'TL', arr:[tl,tr,br,bl]},
+      {x:bbox.right, y:bbox.top,    label:'TR', arr:[tr,br,bl,tl]},
+      {x:bbox.right, y:bbox.bottom, label:'BR', arr:[br,bl,tl,tr]},
+      {x:bbox.left,  y:bbox.bottom, label:'BL', arr:[bl,tl,tr,br]},
+    ];
+    let nearest = bboxCorners[0], minDist = Infinity;
+    for (const c of bboxCorners) {
+      const d = MathUtils.distance(ztl.x, ztl.y, c.x, c.y);
+      if (d < minDist) { minDist = d; nearest = c; }
+    }
+    [tl, tr, br, bl] = nearest.arr;
+    orientLabel = nearest.label + ' (ZXing-confirmed)';
+  } catch(e) {
+    orientLabel = 'default (ZXing: '+e.message+')';
   }
-  tl=expandPt(tl); tr=expandPt(tr); br=expandPt(br); bl=expandPt(bl);
 
-  const sideW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
-  const sideH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
-  const side  = (sideW + sideH) / 2;
-  const topDx=(tr.x-tl.x)/sideW, topDy=(tr.y-tl.y)/sideW;
-  const leftDx=(bl.x-tl.x)/sideH, leftDy=(bl.y-tl.y)/sideH;
-  tr = { x: tl.x + topDx*side,  y: tl.y + topDy*side  };
-  bl = { x: tl.x + leftDx*side, y: tl.y + leftDy*side };
-  br = { x: tl.x + topDx*side + leftDx*side, y: tl.y + topDy*side + leftDy*side };
+  dbg('bbox='+qW+'x'+qH+' orient='+orientLabel);
 
   // Draw overlay — scale from downsampled (sw,sh) coords to display coords
   const dsx=cr.width/sw, dsy=cr.height/sh;
