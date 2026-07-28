@@ -3,351 +3,179 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Marker Detector</title>
+<title>DataMatrix Detector</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
   :root {
-    --bg: #0a0a0a;
-    --surface: #141414;
-    --border: #2a2a2a;
-    --accent: #00e5a0;
-    --accent-dim: rgba(0,229,160,0.12);
-    --text: #f0f0f0;
-    --text-muted: #666;
-    --red: #ff4444;
-    --amber: #ffaa00;
+    --bg: #0a0a0a; --surface: #141414; --border: #222;
+    --accent: #00e5a0; --text: #f0f0f0; --muted: #555;
   }
+  html, body { background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    height: 100%; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100dvh; }
 
-  html, body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
-    height: 100%;
-    overflow: hidden;
-  }
+  #header { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; background: var(--surface);
+    border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  #header h1 { font-size: 15px; font-weight: 600; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .2s; }
 
-  #app {
-    display: flex;
-    flex-direction: column;
-    height: 100dvh;
-  }
+  #cam-wrap { position: relative; flex: 1; overflow: hidden; background: #000; }
+  #video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #overlay { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
 
-  /* ── Header ── */
-  #header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    z-index: 10;
-  }
+  /* Guide box */
+  #guide { position: absolute; top:50%; left:50%;
+    transform: translate(-50%,-50%);
+    width: min(70vw,280px); height: min(70vw,280px); pointer-events:none; }
+  .gc { position:absolute; width:24px; height:24px; border-color:rgba(255,255,255,.5); border-style:solid; }
+  .gc.tl{top:0;left:0;border-width:2px 0 0 2px;border-radius:3px 0 0 0}
+  .gc.tr{top:0;right:0;border-width:2px 2px 0 0;border-radius:0 3px 0 0}
+  .gc.bl{bottom:0;left:0;border-width:0 0 2px 2px;border-radius:0 0 0 3px}
+  .gc.br{bottom:0;right:0;border-width:0 2px 2px 0;border-radius:0 0 3px 0}
 
-  #header h1 {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
-  }
+  #panel { background:var(--surface); border-top:1px solid var(--border); flex-shrink:0; }
 
-  #status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    transition: background 0.2s;
-  }
-  #status-dot.scanning { background: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
-  #status-dot.found    { background: var(--accent); animation: none; }
+  #timing { display:flex; align-items:center; gap:4px; padding:10px 16px;
+    border-bottom:1px solid var(--border); font-size:12px; min-height:38px; }
+  .tl { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); min-width:48px; }
+  .tv { font-family:monospace; font-size:13px; color:var(--text); min-width:54px; }
+  .tv.green { color:var(--accent); }
+  #fps { margin-left:auto; font-size:11px; font-family:monospace; color:var(--muted); }
 
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #dbg { padding:5px 16px; font-size:11px; font-family:monospace;
+    color:var(--muted); border-bottom:1px solid var(--border); min-height:26px; }
 
-  /* ── Camera view ── */
-  #camera-wrap {
-    position: relative;
-    flex: 1;
-    overflow: hidden;
-    background: #000;
-  }
+  #result-area { display:flex; align-items:center; gap:16px; padding:14px 16px; min-height:120px; }
+  #empty { display:flex; flex-direction:column; align-items:center; gap:6px;
+    color:var(--muted); font-size:13px; width:100%; }
+  #empty-icon { font-size:28px; opacity:.25; }
+  #crop-canvas { width:100px; height:100px; border:1px solid var(--border);
+    border-radius:6px; image-rendering:pixelated; display:none; }
+  #info { flex:1; display:flex; flex-direction:column; gap:7px; display:none; }
+  .ir { display:flex; flex-direction:column; gap:2px; }
+  .il { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); }
+  .iv { font-size:13px; font-family:monospace; color:var(--text); }
+  .iv.g { color:var(--accent); }
 
-  #video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  /* Guide box overlay */
-  #guide {
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(65vw, 260px);
-    height: min(65vw, 260px);
-    pointer-events: none;
-  }
-
-  .guide-corner {
-    position: absolute;
-    width: 22px; height: 22px;
-    border-color: rgba(255,255,255,0.7);
-    border-style: solid;
-  }
-  .guide-corner.tl { top:0; left:0;  border-width: 2px 0 0 2px; border-radius: 3px 0 0 0; }
-  .guide-corner.tr { top:0; right:0; border-width: 2px 2px 0 0; border-radius: 0 3px 0 0; }
-  .guide-corner.bl { bottom:0; left:0;  border-width: 0 0 2px 2px; border-radius: 0 0 0 3px; }
-  .guide-corner.br { bottom:0; right:0; border-width: 0 2px 2px 0; border-radius: 0 0 3px 0; }
-
-  #guide-label {
-    position: absolute;
-    bottom: -28px; left: 50%;
-    transform: translateX(-50%);
-    font-size: 12px;
-    color: rgba(255,255,255,0.5);
-    white-space: nowrap;
-    letter-spacing: 0.3px;
-  }
-
-  /* Detected quad overlay */
-  #quad-canvas {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    pointer-events: none;
-  }
-
-  /* ── Bottom panel ── */
-  #panel {
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-  }
-
-  /* Timing strip */
-  #timing-strip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--text-muted);
-    min-height: 40px;
-  }
-
-  #timing-strip .t-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-muted);
-    min-width: 56px;
-  }
-
-  .t-val {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 13px;
-    color: var(--text);
-    min-width: 52px;
-  }
-
-  .t-val.accent { color: var(--accent); }
-
-  #fps-badge {
-    margin-left: auto;
-    font-size: 11px;
-    font-family: monospace;
-    color: var(--text-muted);
-  }
-
-  /* Result canvas */
-  #result-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px 16px;
-    gap: 16px;
-    min-height: 130px;
-  }
-
-  #result-canvas {
-    width: 100px;
-    height: 100px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: #000;
-    image-rendering: pixelated;
-  }
-
-  #result-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .info-row {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .info-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-muted);
-  }
-
-  .info-val {
-    font-size: 13px;
-    font-family: monospace;
-    color: var(--text);
-  }
-
-  .info-val.good  { color: var(--accent); }
-  .info-val.warn  { color: var(--amber); }
-  .info-val.idle  { color: var(--text-muted); }
-
-  /* Empty state */
-  #empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-muted);
-    font-size: 13px;
-    width: 100%;
-    padding: 10px 0;
-  }
-
-  #empty-icon {
-    font-size: 28px;
-    opacity: 0.3;
-  }
-
-  /* Hidden processing canvases */
-  #proc-canvas, #warp-canvas { display: none; }
+  #proc-c { display:none; }
 </style>
 </head>
 <body>
 <div id="app">
-
   <div id="header">
-    <h1>Marker Detector</h1>
+    <h1>DataMatrix Detector</h1>
     <div style="display:flex;align-items:center;gap:8px">
-      <span id="status-text" style="font-size:12px;color:var(--text-muted)">Starting…</span>
-      <div id="status-dot"></div>
+      <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
+      <div id="dot"></div>
     </div>
   </div>
 
-  <div id="camera-wrap">
+  <div id="cam-wrap">
     <video id="video" autoplay muted playsinline></video>
-    <canvas id="quad-canvas"></canvas>
+    <canvas id="overlay"></canvas>
     <div id="guide">
-      <div class="guide-corner tl"></div>
-      <div class="guide-corner tr"></div>
-      <div class="guide-corner bl"></div>
-      <div class="guide-corner br"></div>
-      <span id="guide-label">Point at marker</span>
+      <div class="gc tl"></div><div class="gc tr"></div>
+      <div class="gc bl"></div><div class="gc br"></div>
     </div>
   </div>
 
   <div id="panel">
-    <div id="timing-strip">
-      <span class="t-label">Detect</span>
-      <span class="t-val" id="t-detect">—</span>
-      <span class="t-label" style="margin-left:8px">Warp</span>
-      <span class="t-val" id="t-warp">—</span>
-      <span class="t-label" style="margin-left:8px">Total</span>
-      <span class="t-val accent" id="t-total">—</span>
-      <span id="fps-badge">— fps</span>
+    <div id="timing">
+      <span class="tl">Threshold</span><span class="tv" id="t0">—</span>
+      <span class="tl">Detect</span><span class="tv" id="t1">—</span>
+      <span class="tl">Warp</span><span class="tv" id="t2">—</span>
+      <span class="tl">Total</span><span class="tv green" id="tt">—</span>
+      <span id="fps">— fps</span>
     </div>
-    <div id="debug-strip" style="padding:6px 16px;font-size:11px;font-family:monospace;color:var(--text-muted);border-bottom:1px solid var(--border);min-height:28px">
-      <span id="debug-msg">Waiting…</span>
-    </div>
-
-    <div id="result-wrap">
-      <div id="empty-state">
-        <div id="empty-icon">◻</div>
-        <span>Waiting for marker</span>
-      </div>
-      <canvas id="result-canvas" style="display:none"></canvas>
-      <div id="result-info" style="display:none">
-        <div class="info-row">
-          <span class="info-label">Orientation</span>
-          <span class="info-val idle" id="r-orient">—</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Confidence</span>
-          <span class="info-val idle" id="r-conf">—</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Marker size</span>
-          <span class="info-val idle" id="r-size">—</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Last capture</span>
-          <span class="info-val idle" id="r-time">—</span>
-        </div>
+    <div id="dbg">Waiting…</div>
+    <div id="result-area">
+      <div id="empty"><div id="empty-icon">◻</div><span>Point at DataMatrix marker</span></div>
+      <canvas id="crop-canvas" width="200" height="200"></canvas>
+      <div id="info">
+        <div class="ir"><span class="il">Corners</span><span class="iv" id="i-corners">—</span></div>
+        <div class="ir"><span class="il">Size in frame</span><span class="iv" id="i-size">—</span></div>
+        <div class="ir"><span class="il">Orientation</span><span class="iv g" id="i-rot">—</span></div>
+        <div class="ir"><span class="il">Captured</span><span class="iv" id="i-time">—</span></div>
       </div>
     </div>
   </div>
-
 </div>
-
-<!-- Hidden canvases for processing -->
-<canvas id="proc-canvas"></canvas>
-<canvas id="warp-canvas"></canvas>
+<canvas id="proc-c"></canvas>
 
 <script>
+'use strict';
+// ═══════════════════════════════════════════════════════
+// ZXing DataMatrix Detector — ported to plain JS
+// Sources: zxing-js/library (Apache License 2.0)
+//   core/common/detector/MathUtils.ts
+//   core/ResultPoint.ts
+//   core/common/detector/WhiteRectangleDetector.ts
+//   core/datamatrix/detector/Detector.ts
+// ═══════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════
-// ZXING PORT — ResultPoint, WhiteRectangleDetector, CornerDetector
-// Ported from zxing-js/library (Apache License 2.0)
-// All TypeScript removed, self-contained plain JS
-// ═══════════════════════════════════════════════════════════
+// ── MathUtils ───────────────────────────────────────────
+const MathUtils = {
+  round(d) {
+    if (isNaN(d)) return 0;
+    return (d + (d < 0 ? -0.5 : 0.5)) | 0;
+  },
+  distance(ax, ay, bx, by) {
+    return Math.sqrt((ax-bx)**2 + (ay-by)**2);
+  }
+};
 
-class ZXingNotFoundException extends Error {
-  constructor() { super('NotFoundException'); }
-}
-
+// ── ResultPoint ─────────────────────────────────────────
 class ResultPoint {
   constructor(x, y) { this._x = x; this._y = y; }
   getX() { return this._x; }
   getY() { return this._y; }
-  static distance(a, b) {
-    return Math.sqrt((a._x - b._x) ** 2 + (a._y - b._y) ** 2);
-  }
+  toString() { return `(${this._x.toFixed(1)},${this._y.toFixed(1)})`; }
 }
 
-// MathUtils inline
-const MathUtils = {
-  round: (d) => Math.floor(d + 0.5),
-  distance: (aX, aY, bX, bY) => Math.sqrt((aX - bX) ** 2 + (aY - bY) ** 2),
-};
+// ── BitMatrix ────────────────────────────────────────────
+// Backed by a plain Uint8Array where 1 = black, 0 = white
+// ZXing's .get(x,y) returns true for black
+class BitMatrix {
+  constructor(width, height, data) {
+    this.width  = width;
+    this.height = height;
+    // data is Uint8Array: 1=black, 0=white
+    this._data  = data || new Uint8Array(width * height);
+  }
+  get(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this._data[y * this.width + x] === 1;
+  }
+  set(x, y) { this._data[y * this.width + x] = 1; }
+  getWidth()  { return this.width;  }
+  getHeight() { return this.height; }
+}
 
+// ── NotFoundException ────────────────────────────────────
+class NotFoundException extends Error {
+  constructor(msg) { super(msg || 'NotFoundException'); }
+}
+
+// ── WhiteRectangleDetector ───────────────────────────────
+// Direct port of zxing-js WhiteRectangleDetector.ts
 class WhiteRectangleDetector {
-  static INIT_SIZE = 10;
-  static CORR = 1;
-
   constructor(image, initSize, x, y) {
-    this.image = image;
+    this.image  = image;
     this.height = image.getHeight();
     this.width  = image.getWidth();
-    if (initSize == null) initSize = WhiteRectangleDetector.INIT_SIZE;
+    if (initSize == null) initSize = 10;
     if (x == null) x = (image.getWidth()  / 2) | 0;
     if (y == null) y = (image.getHeight() / 2) | 0;
-    const halfsize = (initSize / 2) | 0;
-    this.leftInit  = x - halfsize;
-    this.rightInit = x + halfsize;
-    this.upInit    = y - halfsize;
-    this.downInit  = y + halfsize;
+    const half = (initSize / 2) | 0;
+    this.leftInit  = x - half;
+    this.rightInit = x + half;
+    this.upInit    = y - half;
+    this.downInit  = y + half;
     if (this.upInit < 0 || this.leftInit < 0 ||
         this.downInit >= this.height || this.rightInit >= this.width) {
-      throw new ZXingNotFoundException();
+      throw new NotFoundException('initSize too large');
     }
   }
 
@@ -355,946 +183,540 @@ class WhiteRectangleDetector {
     let left = this.leftInit, right = this.rightInit;
     let up   = this.upInit,   down  = this.downInit;
     let sizeExceeded = false;
-    let aBlackPointFoundOnBorder = true;
-    let atLeastOneBlackPointFoundOnBorder = false;
-    let atLeastOneBlackPointFoundOnRight  = false;
-    let atLeastOneBlackPointFoundOnBottom = false;
-    let atLeastOneBlackPointFoundOnLeft   = false;
-    let atLeastOneBlackPointFoundOnTop    = false;
+    let aBlack = true, atLeastOne = false;
+    let onR=false, onB=false, onL=false, onT=false;
     const { width, height } = this;
 
-    while (aBlackPointFoundOnBorder) {
-      aBlackPointFoundOnBorder = false;
+    while (aBlack) {
+      aBlack = false;
 
-      let rightBorderNotWhite = true;
-      while ((rightBorderNotWhite || !atLeastOneBlackPointFoundOnRight) && right < width) {
-        rightBorderNotWhite = this.containsBlackPoint(up, down, right, false);
-        if (rightBorderNotWhite) { right++; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnRight = true; }
-        else if (!atLeastOneBlackPointFoundOnRight) right++;
+      let rNotWhite = true;
+      while ((rNotWhite || !onR) && right < width) {
+        rNotWhite = this._containsBlack(up, down, right, false);
+        if (rNotWhite) { right++; aBlack=true; onR=true; }
+        else if (!onR) right++;
       }
-      if (right >= width) { sizeExceeded = true; break; }
+      if (right >= width) { sizeExceeded=true; break; }
 
-      let bottomBorderNotWhite = true;
-      while ((bottomBorderNotWhite || !atLeastOneBlackPointFoundOnBottom) && down < height) {
-        bottomBorderNotWhite = this.containsBlackPoint(left, right, down, true);
-        if (bottomBorderNotWhite) { down++; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnBottom = true; }
-        else if (!atLeastOneBlackPointFoundOnBottom) down++;
+      let bNotWhite = true;
+      while ((bNotWhite || !onB) && down < height) {
+        bNotWhite = this._containsBlack(left, right, down, true);
+        if (bNotWhite) { down++; aBlack=true; onB=true; }
+        else if (!onB) down++;
       }
-      if (down >= height) { sizeExceeded = true; break; }
+      if (down >= height) { sizeExceeded=true; break; }
 
-      let leftBorderNotWhite = true;
-      while ((leftBorderNotWhite || !atLeastOneBlackPointFoundOnLeft) && left >= 0) {
-        leftBorderNotWhite = this.containsBlackPoint(up, down, left, false);
-        if (leftBorderNotWhite) { left--; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnLeft = true; }
-        else if (!atLeastOneBlackPointFoundOnLeft) left--;
+      let lNotWhite = true;
+      while ((lNotWhite || !onL) && left >= 0) {
+        lNotWhite = this._containsBlack(up, down, left, false);
+        if (lNotWhite) { left--; aBlack=true; onL=true; }
+        else if (!onL) left--;
       }
-      if (left < 0) { sizeExceeded = true; break; }
+      if (left < 0) { sizeExceeded=true; break; }
 
-      let topBorderNotWhite = true;
-      while ((topBorderNotWhite || !atLeastOneBlackPointFoundOnTop) && up >= 0) {
-        topBorderNotWhite = this.containsBlackPoint(left, right, up, true);
-        if (topBorderNotWhite) { up--; aBlackPointFoundOnBorder = true; atLeastOneBlackPointFoundOnTop = true; }
-        else if (!atLeastOneBlackPointFoundOnTop) up--;
+      let tNotWhite = true;
+      while ((tNotWhite || !onT) && up >= 0) {
+        tNotWhite = this._containsBlack(left, right, up, true);
+        if (tNotWhite) { up--; aBlack=true; onT=true; }
+        else if (!onT) up--;
       }
-      if (up < 0) { sizeExceeded = true; break; }
+      if (up < 0) { sizeExceeded=true; break; }
 
-      if (aBlackPointFoundOnBorder) atLeastOneBlackPointFoundOnBorder = true;
+      if (aBlack) atLeastOne = true;
     }
 
-    if (!sizeExceeded && atLeastOneBlackPointFoundOnBorder) {
+    if (!sizeExceeded && atLeastOne) {
       const maxSize = right - left;
       let z = null;
-      for (let i = 1; z === null && i < maxSize; i++)
-        z = this.getBlackPointOnSegment(left, down - i, left + i, down);
-      if (z == null) throw new ZXingNotFoundException();
+      for (let i=1; z===null && i<maxSize; i++)
+        z = this._blackOnSegment(left, down-i, left+i, down);
+      if (!z) throw new NotFoundException('z');
 
       let t = null;
-      for (let i = 1; t === null && i < maxSize; i++)
-        t = this.getBlackPointOnSegment(left, up + i, left + i, up);
-      if (t == null) throw new ZXingNotFoundException();
+      for (let i=1; t===null && i<maxSize; i++)
+        t = this._blackOnSegment(left, up+i, left+i, up);
+      if (!t) throw new NotFoundException('t');
 
       let x = null;
-      for (let i = 1; x === null && i < maxSize; i++)
-        x = this.getBlackPointOnSegment(right, up + i, right - i, up);
-      if (x == null) throw new ZXingNotFoundException();
+      for (let i=1; x===null && i<maxSize; i++)
+        x = this._blackOnSegment(right, up+i, right-i, up);
+      if (!x) throw new NotFoundException('x');
 
       let y = null;
-      for (let i = 1; y === null && i < maxSize; i++)
-        y = this.getBlackPointOnSegment(right, down - i, right - i, down);
-      if (y == null) throw new ZXingNotFoundException();
+      for (let i=1; y===null && i<maxSize; i++)
+        y = this._blackOnSegment(right, down-i, right-i, down);
+      if (!y) throw new NotFoundException('y');
 
-      return this.centerEdges(y, z, x, t);
-    } else {
-      throw new ZXingNotFoundException();
+      return this._centerEdges(y, z, x, t);
     }
+    throw new NotFoundException('no border');
   }
 
-  getBlackPointOnSegment(aX, aY, bX, bY) {
-    const dist = MathUtils.round(MathUtils.distance(aX, aY, bX, bY));
-    const xStep = (bX - aX) / dist;
-    const yStep = (bY - aY) / dist;
-    for (let i = 0; i < dist; i++) {
-      const x = MathUtils.round(aX + i * xStep);
-      const y = MathUtils.round(aY + i * yStep);
+  _blackOnSegment(ax, ay, bx, by) {
+    const dist = MathUtils.round(MathUtils.distance(ax, ay, bx, by));
+    const xs = (bx-ax)/dist, ys = (by-ay)/dist;
+    for (let i=0; i<dist; i++) {
+      const x = MathUtils.round(ax + i*xs);
+      const y = MathUtils.round(ay + i*ys);
       if (this.image.get(x, y)) return new ResultPoint(x, y);
     }
     return null;
   }
 
-  centerEdges(y, z, x, t) {
-    const yi = y.getX(), yj = y.getY();
-    const zi = z.getX(), zj = z.getY();
-    const xi = x.getX(), xj = x.getY();
-    const ti = t.getX(), tj = t.getY();
-    const C = WhiteRectangleDetector.CORR;
-    if (yi < this.width / 2.0) {
-      return [new ResultPoint(ti - C, tj + C), new ResultPoint(zi + C, zj + C),
-              new ResultPoint(xi - C, xj - C), new ResultPoint(yi + C, yj - C)];
+  _centerEdges(y, z, x, t) {
+    const C = 1;
+    const yi = y.getX();
+    if (yi < this.width / 2) {
+      return [
+        new ResultPoint(t.getX()-C, t.getY()+C),
+        new ResultPoint(z.getX()+C, z.getY()+C),
+        new ResultPoint(x.getX()-C, x.getY()-C),
+        new ResultPoint(y.getX()+C, y.getY()-C),
+      ];
     } else {
-      return [new ResultPoint(ti + C, tj + C), new ResultPoint(zi + C, zj - C),
-              new ResultPoint(xi - C, xj + C), new ResultPoint(yi - C, yj - C)];
+      return [
+        new ResultPoint(t.getX()+C, t.getY()+C),
+        new ResultPoint(z.getX()+C, z.getY()-C),
+        new ResultPoint(x.getX()-C, x.getY()+C),
+        new ResultPoint(y.getX()-C, y.getY()-C),
+      ];
     }
   }
 
-  containsBlackPoint(a, b, fixed, horizontal) {
+  _containsBlack(a, b, fixed, horizontal) {
     if (horizontal) {
-      for (let x = a; x <= b; x++) if (this.image.get(x, fixed)) return true;
+      for (let x=a; x<=b; x++) if (this.image.get(x, fixed)) return true;
     } else {
-      for (let y = a; y <= b; y++) if (this.image.get(fixed, y)) return true;
+      for (let y=a; y<=b; y++) if (this.image.get(fixed, y)) return true;
     }
     return false;
   }
 }
 
-class CornerDetector {
+// ── DataMatrix Detector ──────────────────────────────────
+// Direct port of zxing-js datamatrix/detector/Detector.ts
+// Only change: detect() returns corners instead of sampling bits
+class DMDetector {
   constructor(image) {
     this.image = image;
-    this.rectangleDetector = new WhiteRectangleDetector(image);
+    this.rectDetector = new WhiteRectangleDetector(image);
   }
 
+  // Returns { topLeft, bottomLeft, bottomRight, topRight } ResultPoints
   detectCorners() {
-    const cornerPoints = this.rectangleDetector.detect();
-    let points = this.detectSolid1(cornerPoints);
-    points = this.detectSolid2(points);
-    points[3] = this.correctTopRight(points);
-    if (!points[3]) throw new ZXingNotFoundException();
-    points = this.shiftToModuleCenter(points);
-    return points; // [topLeft, bottomLeft, bottomRight, topRight]
+    const cp = this.rectDetector.detect();
+    let pts = this._detectSolid1(cp);
+    pts = this._detectSolid2(pts);
+    pts[3] = this._correctTopRight(pts);
+    if (!pts[3]) throw new NotFoundException('correctTopRight failed');
+    pts = this._shiftToModuleCenter(pts);
+    return {
+      topLeft:     pts[0],
+      bottomLeft:  pts[1],
+      bottomRight: pts[2],
+      topRight:    pts[3],
+    };
   }
 
-  static shiftPoint(point, to, div) {
-    const x = (to.getX() - point.getX()) / (div + 1);
-    const y = (to.getY() - point.getY()) / (div + 1);
-    return new ResultPoint(point.getX() + x, point.getY() + y);
+  static _shiftPoint(pt, to, div) {
+    const x = (to.getX() - pt.getX()) / (div+1);
+    const y = (to.getY() - pt.getY()) / (div+1);
+    return new ResultPoint(pt.getX()+x, pt.getY()+y);
   }
 
-  static moveAway(point, fromX, fromY) {
-    let x = point.getX(), y = point.getY();
-    if (x < fromX) x -= 1; else x += 1;
-    if (y < fromY) y -= 1; else y += 1;
+  static _moveAway(pt, fx, fy) {
+    let x = pt.getX(), y = pt.getY();
+    if (x < fx) x--; else x++;
+    if (y < fy) y--; else y++;
     return new ResultPoint(x, y);
   }
 
-  detectSolid1(cornerPoints) {
-    let pA = cornerPoints[0], pB = cornerPoints[1];
-    let pC = cornerPoints[3], pD = cornerPoints[2];
-    const trAB = this.transitionsBetween(pA, pB);
-    const trBC = this.transitionsBetween(pB, pC);
-    const trCD = this.transitionsBetween(pC, pD);
-    const trDA = this.transitionsBetween(pD, pA);
-    let min = trAB;
-    let points = [pD, pA, pB, pC];
-    if (min > trBC) { min = trBC; points = [pA, pB, pC, pD]; }
-    if (min > trCD) { min = trCD; points = [pB, pC, pD, pA]; }
-    if (min > trDA) {             points = [pC, pD, pA, pB]; }
-    return points;
+  _detectSolid1(cp) {
+    let pA=cp[0], pB=cp[1], pC=cp[3], pD=cp[2];
+    const trAB = this._transitions(pA,pB);
+    const trBC = this._transitions(pB,pC);
+    const trCD = this._transitions(pC,pD);
+    const trDA = this._transitions(pD,pA);
+    let min=trAB, pts=[pD,pA,pB,pC];
+    if (min>trBC) { min=trBC; pts=[pA,pB,pC,pD]; }
+    if (min>trCD) { min=trCD; pts=[pB,pC,pD,pA]; }
+    if (min>trDA) {           pts=[pC,pD,pA,pB]; }
+    return pts;
   }
 
-  detectSolid2(points) {
-    let [pA, pB, pC, pD] = points;
-    const tr = this.transitionsBetween(pA, pD);
-    const pBs = CornerDetector.shiftPoint(pB, pC, (tr + 1) * 4);
-    const pCs = CornerDetector.shiftPoint(pC, pB, (tr + 1) * 4);
-    const trBA = this.transitionsBetween(pBs, pA);
-    const trCD = this.transitionsBetween(pCs, pD);
-    if (trBA < trCD) return [pA, pB, pC, pD];
-    else             return [pB, pC, pD, pA];
+  _detectSolid2(pts) {
+    let [pA,pB,pC,pD] = pts;
+    const tr  = this._transitions(pA,pD);
+    const pBs = DMDetector._shiftPoint(pB,pC,(tr+1)*4);
+    const pCs = DMDetector._shiftPoint(pC,pB,(tr+1)*4);
+    const trBA = this._transitions(pBs,pA);
+    const trCD = this._transitions(pCs,pD);
+    return trBA<trCD ? [pA,pB,pC,pD] : [pB,pC,pD,pA];
   }
 
-  correctTopRight(points) {
-    let [pA, pB, pC, pD] = points;
-    let trTop  = this.transitionsBetween(pA, pD);
-    let trRight = this.transitionsBetween(pB, pD);
-    const pAs = CornerDetector.shiftPoint(pA, pB, (trRight + 1) * 4);
-    const pCs = CornerDetector.shiftPoint(pC, pB, (trTop   + 1) * 4);
-    trTop  = this.transitionsBetween(pAs, pD);
-    trRight = this.transitionsBetween(pCs, pD);
-    const c1 = new ResultPoint(pD.getX() + (pC.getX() - pB.getX()) / (trTop   + 1),
-                                pD.getY() + (pC.getY() - pB.getY()) / (trTop   + 1));
-    const c2 = new ResultPoint(pD.getX() + (pA.getX() - pB.getX()) / (trRight + 1),
-                                pD.getY() + (pA.getY() - pB.getY()) / (trRight + 1));
-    const v1 = this.isValid(c1), v2 = this.isValid(c2);
+  _correctTopRight(pts) {
+    let [pA,pB,pC,pD] = pts;
+    let trTop   = this._transitions(pA,pD);
+    let trRight = this._transitions(pB,pD);
+    const pAs = DMDetector._shiftPoint(pA,pB,(trRight+1)*4);
+    const pCs = DMDetector._shiftPoint(pC,pB,(trTop+1)*4);
+    trTop   = this._transitions(pAs,pD);
+    trRight = this._transitions(pCs,pD);
+    const c1 = new ResultPoint(pD.getX()+(pC.getX()-pB.getX())/(trTop+1),
+                                pD.getY()+(pC.getY()-pB.getY())/(trTop+1));
+    const c2 = new ResultPoint(pD.getX()+(pA.getX()-pB.getX())/(trRight+1),
+                                pD.getY()+(pA.getY()-pB.getY())/(trRight+1));
+    const v1=this._isValid(c1), v2=this._isValid(c2);
     if (!v1 && !v2) return null;
     if (!v1) return c2;
     if (!v2) return c1;
-    const s1 = this.transitionsBetween(pAs, c1) + this.transitionsBetween(pCs, c1);
-    const s2 = this.transitionsBetween(pAs, c2) + this.transitionsBetween(pCs, c2);
-    return s1 > s2 ? c1 : c2;
+    const s1 = this._transitions(pAs,c1)+this._transitions(pCs,c1);
+    const s2 = this._transitions(pAs,c2)+this._transitions(pCs,c2);
+    return s1>s2 ? c1 : c2;
   }
 
-  shiftToModuleCenter(points) {
-    let [pA, pB, pC, pD] = points;
-    let dimH = this.transitionsBetween(pA, pD) + 1;
-    let dimV = this.transitionsBetween(pC, pD) + 1;
-    let pAs = CornerDetector.shiftPoint(pA, pB, dimV * 4);
-    let pCs = CornerDetector.shiftPoint(pC, pB, dimH * 4);
-    dimH = this.transitionsBetween(pAs, pD) + 1;
-    dimV = this.transitionsBetween(pCs, pD) + 1;
-    if (dimH & 1) dimH++;
-    if (dimV & 1) dimV++;
-    const cx = (pA.getX() + pB.getX() + pC.getX() + pD.getX()) / 4;
-    const cy = (pA.getY() + pB.getY() + pC.getY() + pD.getY()) / 4;
-    pA = CornerDetector.moveAway(pA, cx, cy);
-    pB = CornerDetector.moveAway(pB, cx, cy);
-    pC = CornerDetector.moveAway(pC, cx, cy);
-    pD = CornerDetector.moveAway(pD, cx, cy);
-    pAs = CornerDetector.shiftPoint(pA,  pB, dimV * 4);
-    pAs = CornerDetector.shiftPoint(pAs, pD, dimH * 4);
-    const pBs = CornerDetector.shiftPoint(CornerDetector.shiftPoint(pB, pA, dimV * 4), pC, dimH * 4);
-    pCs = CornerDetector.shiftPoint(pC,  pD, dimV * 4);
-    pCs = CornerDetector.shiftPoint(pCs, pB, dimH * 4);
-    const pDs = CornerDetector.shiftPoint(CornerDetector.shiftPoint(pD, pC, dimV * 4), pA, dimH * 4);
-    return [pAs, pBs, pCs, pDs];
+  _shiftToModuleCenter(pts) {
+    let [pA,pB,pC,pD] = pts;
+    let dimH = this._transitions(pA,pD)+1;
+    let dimV = this._transitions(pC,pD)+1;
+    let pAs = DMDetector._shiftPoint(pA,pB,dimV*4);
+    let pCs = DMDetector._shiftPoint(pC,pB,dimH*4);
+    dimH = this._transitions(pAs,pD)+1;
+    dimV = this._transitions(pCs,pD)+1;
+    if (dimH&1) dimH++;
+    if (dimV&1) dimV++;
+    const cx=(pA.getX()+pB.getX()+pC.getX()+pD.getX())/4;
+    const cy=(pA.getY()+pB.getY()+pC.getY()+pD.getY())/4;
+    pA=DMDetector._moveAway(pA,cx,cy);
+    pB=DMDetector._moveAway(pB,cx,cy);
+    pC=DMDetector._moveAway(pC,cx,cy);
+    pD=DMDetector._moveAway(pD,cx,cy);
+    pAs = DMDetector._shiftPoint(DMDetector._shiftPoint(pA,pB,dimV*4),pD,dimH*4);
+    const pBs = DMDetector._shiftPoint(DMDetector._shiftPoint(pB,pA,dimV*4),pC,dimH*4);
+    pCs = DMDetector._shiftPoint(DMDetector._shiftPoint(pC,pD,dimV*4),pB,dimH*4);
+    const pDs = DMDetector._shiftPoint(DMDetector._shiftPoint(pD,pC,dimV*4),pA,dimH*4);
+    return [pAs,pBs,pCs,pDs];
   }
 
-  isValid(p) {
-    return p.getX() >= 0 && p.getX() < this.image.getWidth() &&
-           p.getY() >  0 && p.getY() < this.image.getHeight();
+  _isValid(p) {
+    return p.getX()>=0 && p.getX()<this.image.getWidth() &&
+           p.getY()>0  && p.getY()<this.image.getHeight();
   }
 
-  transitionsBetween(from, to) {
-    let fromX = Math.trunc(from.getX()), fromY = Math.trunc(from.getY());
-    let toX   = Math.trunc(to.getX()),   toY   = Math.trunc(to.getY());
-    let steep = Math.abs(toY - fromY) > Math.abs(toX - fromX);
-    if (steep) {
-      [fromX, fromY] = [fromY, fromX];
-      [toX,   toY  ] = [toY,   toX  ];
-    }
-    const dx = Math.abs(toX - fromX), dy = Math.abs(toY - fromY);
-    let error = -dx / 2;
-    const ystep = fromY < toY ? 1 : -1;
-    const xstep = fromX < toX ? 1 : -1;
-    let transitions = 0;
-    let inBlack = this.image.get(steep ? fromY : fromX, steep ? fromX : fromY);
-    for (let x = fromX, y = fromY; x !== toX; x += xstep) {
-      const isBlack = this.image.get(steep ? y : x, steep ? x : y);
-      if (isBlack !== inBlack) { transitions++; inBlack = isBlack; }
-      error += dy;
-      if (error > 0) {
-        if (y === toY) break;
-        y += ystep;
-        error -= dx;
-      }
+  // Bresenham transition count — exact ZXing port
+  _transitions(from, to) {
+    let fx=Math.trunc(from.getX()), fy=Math.trunc(from.getY());
+    let tx=Math.trunc(to.getX()),   ty=Math.trunc(to.getY());
+    let steep = Math.abs(ty-fy) > Math.abs(tx-fx);
+    if (steep) { [fx,fy]=[fy,fx]; [tx,ty]=[ty,tx]; }
+    const dx=Math.abs(tx-fx), dy=Math.abs(ty-fy);
+    let error=-dx/2, ystep=fy<ty?1:-1, xstep=fx<tx?1:-1;
+    let transitions=0;
+    let inBlack = this.image.get(steep?fy:fx, steep?fx:fy);
+    for (let x=fx,y=fy; x!==tx; x+=xstep) {
+      const isBlack = this.image.get(steep?y:x, steep?x:y);
+      if (isBlack!==inBlack) { transitions++; inBlack=isBlack; }
+      error+=dy;
+      if (error>0) { if(y===ty) break; y+=ystep; error-=dx; }
     }
     return transitions;
   }
 }
 
-// BitMatrix wrapper — converts our Uint8Array thresh into ZXing's .get(x,y) interface
-function makeBitMatrix(thresh, w, h) {
-  return {
-    getWidth()  { return w; },
-    getHeight() { return h; },
-    get(x, y) {
-      if (x < 0 || x >= w || y < 0 || y >= h) return false;
-      return thresh[y * w + x] === 0; // true = black
-    }
-  };
-}
-
-// ─────────────────────────────────────────────
-// MARKER GEOMETRY (from actual marker analysis)
-// All as fractions of marker width
-// ─────────────────────────────────────────────
-const M = {
-  borderFrac:  0.082,   // 14/170 — outer border thickness
-  wsFrac:      0.412,   // 70/170 — white square ends at this fraction
-  // The white square occupies top-left (borderFrac to wsFrac) in both axes
-  // Anchor (black square) sits inside white square
-  anchorStart: 0.153,   // 26/170
-  anchorEnd:   0.324,   // 55/170
-};
-
-// ─────────────────────────────────────────────
-// STATE
-// ─────────────────────────────────────────────
-const video       = document.getElementById('video');
-const quadCanvas  = document.getElementById('quad-canvas');
-const qCtx        = quadCanvas.getContext('2d');
-const procCanvas  = document.getElementById('proc-canvas');
-const pCtx        = procCanvas.getContext('2d', { willReadFrequently: true });
-const warpCanvas  = document.getElementById('warp-canvas');
-const wCtx        = warpCanvas.getContext('2d', { willReadFrequently: true });
-const resultCanvas= document.getElementById('result-canvas');
-const rCtx        = resultCanvas.getContext('2d');
-
-const PROC_W = 480, PROC_H = 270;   // detection resolution (1/4 of 1080p)
-const WARP_SZ = 200;                 // output crop size
-
-procCanvas.width  = PROC_W;
-procCanvas.height = PROC_H;
-warpCanvas.width  = WARP_SZ;
-warpCanvas.height = WARP_SZ;
-resultCanvas.width  = WARP_SZ;
-resultCanvas.height = WARP_SZ;
-
-let lastFrameTime = 0;
-let frameCount = 0;
-let fps = 0;
-let roi = null;         // { x,y,w,h } locked region of interest
-let missCount = 0;
-let lastDetection = null;
-let scanning = false;
-
-// ─────────────────────────────────────────────
-// CAMERA SETUP
-// ─────────────────────────────────────────────
-async function startCamera() {
-  setStatus('Requesting camera…', 'idle');
-  try {
-    // Prefer back camera, ask for high res
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1920 },
-        height: { ideal: 1080 },
-      }
-    });
-    video.srcObject = stream;
-    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
-    await video.play();
-    setStatus('Scanning…', 'scanning');
-    scanning = true;
-    requestAnimationFrame(loop);
-  } catch(e) {
-    setStatus('Camera denied', 'idle');
-    console.error(e);
-  }
-}
-
-// ─────────────────────────────────────────────
-// MAIN LOOP
-// ─────────────────────────────────────────────
-let frameSkip = 0;
-function loop(ts) {
-  if (!scanning) return;
-  requestAnimationFrame(loop);
-
-  // FPS calculation
-  frameCount++;
-  if (ts - lastFrameTime >= 1000) {
-    fps = frameCount;
-    frameCount = 0;
-    lastFrameTime = ts;
-    document.getElementById('fps-badge').textContent = fps + ' fps';
-  }
-
-  // Sync quad canvas to camera area
-  const cr = document.getElementById('camera-wrap').getBoundingClientRect();
-  quadCanvas.width  = cr.width;
-  quadCanvas.height = cr.height;
-
-  // Skip every other frame once ROI-locked (saves CPU)
-  frameSkip = (frameSkip + 1) % (roi ? 2 : 1);
-  if (frameSkip !== 0) return;
-
-  if (video.readyState < 2) return;
-
-  const t0 = performance.now();
-
-  // ── Stage 1: Downsample ──
-  // Maintain aspect ratio
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const scale = Math.min(PROC_W / vw, PROC_H / vh);
-  const sw = Math.round(vw * scale), sh = Math.round(vh * scale);
-  pCtx.drawImage(video, 0, 0, sw, sh);
-  const imageData = pCtx.getImageData(0, 0, sw, sh);
-
-  // ── Stage 2: Greyscale + threshold ──
-  const grey = toGreyscale(imageData);
-  const thresh = adaptiveThreshold(grey, sw, sh, 31, 4);
-
-  // ── Stage 3: Detect marker — only inside the guide box region ──
-  // Crop to center 70% of frame — matches the guide box on screen
-  // This prevents the laptop bezel / background from being detected
-  const cropFrac = 0.70;
-  const cropX = Math.round(sw * (1 - cropFrac) / 2);
-  const cropY = Math.round(sh * (1 - cropFrac) / 2);
-  const cropW = Math.round(sw * cropFrac);
-  const cropH = Math.round(sh * cropFrac);
-
-  // Extract cropped region of thresh
-  const threshCrop = new Uint8Array(cropW * cropH);
-  for (let cy2 = 0; cy2 < cropH; cy2++) {
-    for (let cx2 = 0; cx2 < cropW; cx2++) {
-      threshCrop[cy2 * cropW + cx2] = thresh[(cropY + cy2) * sw + (cropX + cx2)];
-    }
-  }
-
-  // Detect in cropped coords, then offset result back to full frame coords
-  const quadCrop = detectMarker(threshCrop, cropW, cropH);
-  const quad = quadCrop
-    ? quadCrop.map(([x, y]) => [x + cropX, y + cropY])
-    : null;
-  const tDetect = performance.now() - t0;
-
-  if (quad) {
-    missCount = 0;
-    // Scale quad back to video coords
-    const scaleX = vw / sw, scaleY = vh / sh;
-    const videoQuad = quad.map(([x, y]) => [x * scaleX, y * scaleY]);
-
-    // Lock ROI
-    const xs = videoQuad.map(p => p[0]), ys = videoQuad.map(p => p[1]);
-    const pad = vw * 0.08;
-    roi = {
-      x: Math.max(0, Math.min(...xs) - pad),
-      y: Math.max(0, Math.min(...ys) - pad),
-      w: Math.min(vw, Math.max(...xs) - Math.min(...xs) + pad * 2),
-      h: Math.min(vh, Math.max(...ys) - Math.min(...ys) + pad * 2),
-    };
-
-    // Draw quad overlay
-    drawQuad(qCtx, videoQuad, vw, vh, cr);
-
-    // ── Stage 4: Warp + orient ──
-    const t1 = performance.now();
-    const { canvas: warped, rotation, confidence } =
-      warpAndOrient(video, videoQuad, vw, vh);
-    const tWarp = performance.now() - t1;
-    const tTotal = performance.now() - t0;
-
-    // Show result
-    rCtx.drawImage(warped, 0, 0, WARP_SZ, WARP_SZ);
-    showResult(rotation, confidence, quad, tDetect, tWarp, tTotal);
-
-  } else {
-    missCount++;
-    if (missCount > 8) {
-      roi = null;
-      qCtx.clearRect(0, 0, quadCanvas.width, quadCanvas.height);
-    }
-    updateTiming(tDetect, null, null);
-  }
-}
-
-// ─────────────────────────────────────────────
-// IMAGE PROCESSING
-// ─────────────────────────────────────────────
-
-function toGreyscale(imageData) {
-  const { data, width, height } = imageData;
-  const out = new Uint8Array(width * height);
-  for (let i = 0; i < out.length; i++) {
-    const o = i * 4;
-    // Use MAX channel instead of luminance weights.
-    // Handles blue-tinted screens: a dark blue pixel has low R, low G, low B
-    // so max(R,G,B) still reads dark, while a white pixel reads bright.
-    // Standard luminance would under-darken blue-dominant "black" regions.
-    out[i] = Math.max(data[o], data[o+1], data[o+2]);
-  }
-  return out;
-}
-
-function adaptiveThreshold(grey, w, h, blockSize, C) {
-  // Local mean via box filter approximation (integral image)
-  const integral = new Int32Array((w + 1) * (h + 1));
-  const iw = w + 1;
-  for (let y = 1; y <= h; y++) {
-    let rowSum = 0;
-    for (let x = 1; x <= w; x++) {
-      rowSum += grey[(y-1)*w + (x-1)];
-      integral[y*iw + x] = integral[(y-1)*iw + x] + rowSum;
-    }
-  }
-
-  const half = Math.floor(blockSize / 2);
-  const out = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const x1 = Math.max(0, x - half), y1 = Math.max(0, y - half);
-      const x2 = Math.min(w-1, x + half), y2 = Math.min(h-1, y + half);
-      const area = (x2 - x1) * (y2 - y1);
-      const sum = integral[(y2+1)*iw + (x2+1)]
-                - integral[y1*iw + (x2+1)]
-                - integral[(y2+1)*iw + x1]
-                + integral[y1*iw + x1];
-      const mean = sum / area;
-      out[y*w + x] = grey[y*w + x] < (mean - C) ? 0 : 255;
-    }
-  }
-  return out;
-}
-
-// ─────────────────────────────────────────────
-// DEBUG HELPER
-// ─────────────────────────────────────────────
-function dbg(msg) {
-  const el = document.getElementById('debug-msg');
-  if (el) el.textContent = msg;
-}
-
-// ─────────────────────────────────────────────
-// MARKER DETECTION
-// Find a quad with the right proportions for our marker
-// Strategy: scanline projection to find dense black bands
-// ─────────────────────────────────────────────
-
-function detectMarker(thresh, w, h) {
-  // Sum black pixels per row and column
-  const rowSum = new Int32Array(h);
-  const colSum = new Int32Array(w);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (thresh[y*w + x] === 0) {
-        rowSum[y]++;
-        colSum[x]++;
-      }
-    }
-  }
-
-  // Find dense black row bands (marker border)
-  // A border row has >50% black pixels
-  const rowThresh = w * 0.30;
-  const colThresh = h * 0.30;
-
-  // Find contiguous bands in row profile
-  const rowBands = findBands(rowSum, rowThresh, h);
-  const colBands = findBands(colSum, colThresh, w);
-
-  if (rowBands.length < 2 || colBands.length < 2) {
-    dbg('No border bands found (rows:'+rowBands.length+' cols:'+colBands.length+')'); return null;
-  }
-
-  // Try all combinations of row/col band pairs, pick the most square one
-  let bestQuad = null, bestScore = Infinity;
-  for (let ri = 0; ri < rowBands.length - 1; ri++) {
-    for (let rj = ri + 1; rj < rowBands.length; rj++) {
-      for (let ci = 0; ci < colBands.length - 1; ci++) {
-        for (let cj = ci + 1; cj < colBands.length; cj++) {
-          const mW = colBands[cj].end - colBands[ci].start;
-          const mH = rowBands[rj].end - rowBands[ri].start;
-          const asp = mW / mH;
-          // Score = how far from square (0 = perfect square)
-          const score = Math.abs(1 - asp);
-          if (score < bestScore) {
-            bestScore = score;
-            bestQuad = { top: rowBands[ri], bottom: rowBands[rj],
-                         left: colBands[ci], right: colBands[cj] };
-          }
-        }
-      }
-    }
-  }
-  if (!bestQuad) { dbg('No quad candidate'); return null; }
-  const { top, bottom, left, right } = bestQuad;
-
-  // Validate rough square shape
-  const markerH = bottom.end - top.start;
-  const markerW = right.end - left.start;
-  if (markerH < 20 || markerW < 20) return null;
-
-  const aspect = markerW / markerH;
-  if (aspect < 0.82 || aspect > 1.22) { dbg('Bad aspect '+aspect.toFixed(2)+' (need 0.82-1.22)'); return null; }
-
-  // Reject if too small or too large (rejects bezel/fullscreen false positives)
-  if (markerW < w * 0.08 || markerW > w * 0.78) { dbg('Size OOB: '+markerW+'x'+markerH+' frame:'+w+'x'+h); return null; }
-  if (markerH < h * 0.08 || markerH > h * 0.78) { dbg('Size OOB H: '+markerH); return null; }
-
-  // Must be roughly centered — rejects markers at extreme edges of frame
-  const cx = (left.start + right.end) >> 1;
-  const cy = (top.start + bottom.end) >> 1;
-  const frameCx = w / 2, frameCy = h / 2;
-  if (Math.abs(cx - frameCx) > w * 0.45) { dbg('Off-center X: cx='+Math.round(cx)+' fcx='+Math.round(frameCx)); return null; }
-  if (Math.abs(cy - frameCy) > h * 0.45) { dbg('Off-center Y: cy='+Math.round(cy)+' fcy='+Math.round(frameCy)); return null; }
-
-  // Verify inner content: center should NOT be all black
-  const innerBlack = sampleRect(thresh, w,
-    left.end, top.end, right.start - left.end, bottom.start - top.end);
-  if (innerBlack > 0.92) { dbg('Inner too black: '+innerBlack.toFixed(2)); return null; }
-
-  // Validate white square in top-left inner region
-  const innerW = right.start - left.end;
-  const innerH = bottom.start - top.end;
-  const wsW = Math.round(innerW * (M.wsFrac - M.borderFrac) / (1 - 2*M.borderFrac));
-  const wsH = Math.round(innerH * (M.wsFrac - M.borderFrac) / (1 - 2*M.borderFrac));
-  const wsWhiteness = 1 - sampleRect(thresh, w,
-    left.end, top.end, wsW, wsH);
-  if (wsWhiteness < 0.35) { dbg('White sq failed: '+wsWhiteness.toFixed(2)+' need 0.35'); return null; }
-  dbg('PASS: sz='+markerW+'x'+markerH+' ws='+wsWhiteness.toFixed(2)+' ib='+innerBlack.toFixed(2));
-
-  // Return the four corners as a quad [TL, TR, BR, BL]
-  return [
-    [left.start,  top.start],
-    [right.end,   top.start],
-    [right.end,   bottom.end],
-    [left.start,  bottom.end],
-  ];
-}
-
-function findBands(sums, threshold, max) {
-  const bands = [];
-  let inBand = false, bandStart = 0;
-  for (let i = 0; i < max; i++) {
-    if (sums[i] >= threshold) {
-      if (!inBand) { inBand = true; bandStart = i; }
-    } else {
-      if (inBand) {
-        inBand = false;
-        bands.push({ start: bandStart, end: i, mid: (bandStart + i) >> 1 });
-      }
-    }
-  }
-  if (inBand) bands.push({ start: bandStart, end: max, mid: (bandStart + max) >> 1 });
-  return bands;
-}
-
-function sampleRect(thresh, w, x, y, rw, rh) {
-  // Returns fraction of black pixels in rectangle
-  x = Math.max(0, Math.round(x));
-  y = Math.max(0, Math.round(y));
-  rw = Math.max(1, Math.round(rw));
-  rh = Math.max(1, Math.round(rh));
-  let black = 0, total = 0;
-  const step = Math.max(1, Math.min(rw, rh) >> 3); // sample every nth pixel
-  for (let dy = 0; dy < rh; dy += step) {
-    for (let dx = 0; dx < rw; dx += step) {
-      if (thresh[(y+dy)*w + (x+dx)] === 0) black++;
-      total++;
-    }
-  }
-  return total > 0 ? black / total : 0;
-}
-
-// ─────────────────────────────────────────────
-// WARP + ORIENT
-// ─────────────────────────────────────────────
-
-function warpAndOrient(videoEl, quad, vw, vh) {
-  // ── Step 1: Draw full-res frame to a temp canvas for ZXing ──
-  wCtx.drawImage(videoEl, 0, 0, vw, vh, 0, 0, WARP_SZ, WARP_SZ);
-  const scaleX = WARP_SZ / vw, scaleY = WARP_SZ / vh;
-
-  // Scale the rough scanline quad down to WARP_SZ coords
-  // Use the scanline quad center + 30% padding to define ZXing's search region
-  const xs = quad.map(p => p[0] * scaleX), ys = quad.map(p => p[1] * scaleY);
-  const qx1 = Math.max(0, Math.min(...xs) - 10);
-  const qy1 = Math.max(0, Math.min(...ys) - 10);
-  const qx2 = Math.min(WARP_SZ, Math.max(...xs) + 10);
-  const qy2 = Math.min(WARP_SZ, Math.max(...ys) + 10);
-  const qcx = ((qx1 + qx2) / 2) | 0;
-  const qcy = ((qy1 + qy2) / 2) | 0;
-  const qsz = Math.max(qx2 - qx1, qy2 - qy1);
-
-  // ── Step 2: Get pixel data and build BitMatrix for ZXing ──
-  const frameData = wCtx.getImageData(0, 0, WARP_SZ, WARP_SZ);
-  const frameGrey = toGreyscale(frameData);
-  const frameThresh = adaptiveThreshold(frameGrey, WARP_SZ, WARP_SZ, 21, 4);
-  const bitMatrix = makeBitMatrix(frameThresh, WARP_SZ, WARP_SZ);
-
-  // ── Step 3: Run ZXing CornerDetector centered on our rough quad ──
-  let corners = null;
-  try {
-    const detector = new CornerDetector(bitMatrix);
-    // Override the WhiteRectangleDetector to start near our quad center
-    detector.rectangleDetector = new WhiteRectangleDetector(bitMatrix, qsz | 0, qcx, qcy);
-    const pts = detector.detectCorners();
-    // pts = [topLeft, bottomLeft, bottomRight, topRight] in WARP_SZ coords
-    corners = [
-      [pts[0].getX(), pts[0].getY()], // TL
-      [pts[3].getX(), pts[3].getY()], // TR
-      [pts[2].getX(), pts[2].getY()], // BR
-      [pts[1].getX(), pts[1].getY()], // BL
-    ];
-    dbg('ZXing corners: TL=('+Math.round(corners[0][0])+','+Math.round(corners[0][1])+')');
-  } catch(e) {
-    // ZXing failed — fall back to scanline bounding box
-    dbg('ZXing fallback: '+e.message);
-    corners = quad.map(([x, y]) => [x * scaleX, y * scaleY]);
-  }
-
-  // ── Step 4: Perspective warp using ZXing corners ──
-  const [tl, tr, br, bl] = corners;
-  const off = (typeof OffscreenCanvas !== 'undefined')
-    ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
-    : (() => { const c = document.createElement('canvas'); c.width = c.height = WARP_SZ; return c; })();
-  const offCtx = off.getContext('2d');
-
-  // Use canvas perspective transform via setTransform with homography
-  const H = solveHomographyForCanvas(tl, tr, br, bl, WARP_SZ);
-  if (H) {
-    // Warp by drawing each scanline using the inverse homography
-    perspectiveWarp(offCtx, wCtx.canvas || warpCanvas, H, WARP_SZ);
-  } else {
-    // Simple affine fallback
-    const qW = Math.hypot(tr[0]-tl[0], tr[1]-tl[1]);
-    const qH = Math.hypot(bl[0]-tl[0], bl[1]-tl[1]);
-    offCtx.drawImage(warpCanvas, tl[0], tl[1], qW, qH, 0, 0, WARP_SZ, WARP_SZ);
-  }
-
-  // ── Orientation detection ──
-  // Sample the four inner corners after warp
-  // TL corner should have high whiteness (white square)
-  // Check all four — the one with highest white = TL
-  const sz = WARP_SZ;
-  const warped = off.getContext('2d').getImageData(0, 0, sz, sz);
-  const rotation = detectOrientation(warped, sz);
-  const confidence = getOrientationConfidence(warped, sz, rotation);
-
-  // Apply rotation correction
-  const corrected = new OffscreenCanvas ? new OffscreenCanvas(WARP_SZ, WARP_SZ)
-                                        : document.createElement('canvas');
-  corrected.width = corrected.height = WARP_SZ;
-  const cCtx = corrected.getContext('2d');
-  cCtx.save();
-  cCtx.translate(WARP_SZ/2, WARP_SZ/2);
-  cCtx.rotate(rotation * Math.PI / 2);
-  cCtx.drawImage(off, -WARP_SZ/2, -WARP_SZ/2);
-  cCtx.restore();
-
-  return { canvas: corrected, rotation, confidence };
-}
-
-function detectOrientation(imageData, sz) {
-  // Sample whiteness of inner-corner zones (15% of sz from each corner)
-  const z = Math.round(sz * 0.15);  // zone size
-  const b = Math.round(sz * 0.08);  // margin from edge
-
-  const zones = [
-    cornerWhiteness(imageData, sz, b,    b,    z), // TL
-    cornerWhiteness(imageData, sz, sz-b-z, b,   z), // TR
-    cornerWhiteness(imageData, sz, b,    sz-b-z, z), // BL
-    cornerWhiteness(imageData, sz, sz-b-z, sz-b-z, z), // BR
-  ];
-
-  // The corner with highest whiteness is TL (white square location)
-  const maxIdx = zones.indexOf(Math.max(...zones));
-  // Rotation needed: 0=TL, 1=TR(need -1 or 3), 2=BL(need 1), 3=BR(need 2)
-  const rotMap = [0, 3, 1, 2]; // how many 90° CW rotations to apply
-  return rotMap[maxIdx];
-}
-
-function cornerWhiteness(imageData, sz, x, y, z) {
-  const { data, width } = imageData;
-  let bright = 0, total = 0;
-  const step = Math.max(1, z >> 3);
-  for (let dy = 0; dy < z; dy += step) {
-    for (let dx = 0; dx < z; dx += step) {
-      const px = ((y + dy) * width + (x + dx)) * 4;
-      const lum = (data[px] * 77 + data[px+1] * 150 + data[px+2] * 29) >> 8;
-      if (lum > 130) bright++;
-      total++;
-    }
-  }
-  return total > 0 ? bright / total : 0;
-}
-
-function getOrientationConfidence(imageData, sz, rotation) {
-  const z = Math.round(sz * 0.15);
-  const b = Math.round(sz * 0.08);
-  const zones = [
-    cornerWhiteness(imageData, sz, b,      b,      z),
-    cornerWhiteness(imageData, sz, sz-b-z, b,      z),
-    cornerWhiteness(imageData, sz, b,      sz-b-z, z),
-    cornerWhiteness(imageData, sz, sz-b-z, sz-b-z, z),
-  ];
-  const sorted = [...zones].sort((a,b) => b - a);
-  // Confidence = gap between highest and second-highest whiteness
-  const gap = sorted[0] - sorted[1];
-  return Math.min(100, Math.round(gap * 200));
-}
-
-// computeHomography replaced by ZXing-based warp above
-
-
-// ─────────────────────────────────────────────
-// PERSPECTIVE WARP (scanline inverse homography)
-// ─────────────────────────────────────────────
-
-function solveHomographyForCanvas(tl, tr, br, bl, sz) {
-  // Compute H that maps [tl,tr,br,bl] -> [0,0],[sz,0],[sz,sz],[0,sz]
-  // Using DLT (Direct Linear Transform)
-  const srcPts = [tl, tr, br, bl];
-  const dstPts = [[0,0],[sz,0],[sz,sz],[0,sz]];
+// ═══════════════════════════════════════════════════════
+// PERSPECTIVE WARP — inverse homography pixel mapping
+// ═══════════════════════════════════════════════════════
+function perspectiveWarp(srcImageData, srcW, srcH, corners, outSize) {
+  // corners = [tl,tr,br,bl] each {x,y}
+  const [tl,tr,br,bl] = corners;
+  // Build H: src quad -> dst square [0..outSize]
+  // Using DLT
+  const srcPts = [[tl.x,tl.y],[tr.x,tr.y],[br.x,br.y],[bl.x,bl.y]];
+  const dstPts = [[0,0],[outSize,0],[outSize,outSize],[0,outSize]];
   const A = [];
-  for (let i = 0; i < 4; i++) {
-    const [sx, sy] = srcPts[i], [dx, dy] = dstPts[i];
+  for (let i=0; i<4; i++) {
+    const [sx,sy]=srcPts[i], [dx,dy]=dstPts[i];
     A.push([-sx,-sy,-1, 0,  0,  0, dx*sx, dx*sy, dx]);
     A.push([ 0,  0,  0,-sx,-sy,-1, dy*sx, dy*sy, dy]);
   }
-  const h = gaussElim(A);
+  const h = _gaussElim(A);
   if (!h) return null;
-  return [h[0],h[1],h[2], h[3],h[4],h[5], h[6],h[7],1];
-}
+  // H = [h0..h7, 1]
+  const H = [...h, 1];
 
-function gaussElim(A) {
-  const n = A.length;
-  for (let col = 0; col < n; col++) {
-    let maxRow = col;
-    for (let r = col+1; r < n; r++)
-      if (Math.abs(A[r][col]) > Math.abs(A[maxRow][col])) maxRow = r;
-    [A[col], A[maxRow]] = [A[maxRow], A[col]];
-    const piv = A[col][col];
-    if (Math.abs(piv) < 1e-10) return null;
-    for (let r = 0; r < n; r++) {
-      if (r === col) continue;
-      const f = A[r][col] / piv;
-      for (let c = col; c <= n; c++) A[r][c] -= f * A[col][c];
-    }
-    for (let c = col; c <= n; c++) A[col][c] /= piv;
-  }
-  return A.map(r => r[n]);
-}
-
-function perspectiveWarp(dstCtx, srcCanvas, H, sz) {
-  // H maps src -> dst. We need inv(H) to map dst pixel -> src pixel
-  // Compute inverse of 3x3 H
+  // Compute inverse of H
   const [h0,h1,h2,h3,h4,h5,h6,h7,h8] = H;
   const det = h0*(h4*h8-h5*h7) - h1*(h3*h8-h5*h6) + h2*(h3*h7-h4*h6);
-  if (Math.abs(det) < 1e-10) {
-    // degenerate — fallback simple draw
-    dstCtx.drawImage(srcCanvas, 0, 0, sz, sz);
-    return;
-  }
+  if (Math.abs(det)<1e-10) return null;
   const inv = [
     (h4*h8-h5*h7)/det, (h2*h7-h1*h8)/det, (h1*h5-h2*h4)/det,
     (h5*h6-h3*h8)/det, (h0*h8-h2*h6)/det, (h2*h3-h0*h5)/det,
     (h3*h7-h4*h6)/det, (h1*h6-h0*h7)/det, (h0*h4-h1*h3)/det,
   ];
 
-  // Draw row by row using ctx.setTransform for each strip — efficient enough for WARP_SZ
-  // Actually use getImageData/putImageData for pixel-perfect warp
-  const src = dstCtx.canvas; // won't work — we need srcCanvas pixels
-  // Get source pixels once
-  const tmpCtx = warpCanvas.getContext('2d', {willReadFrequently: true});
-  const srcData = tmpCtx.getImageData(0, 0, sz, sz);
-  const sd = srcData.data;
+  const sd = srcImageData.data;
+  const dst = new ImageData(outSize, outSize);
+  const dd = dst.data;
 
-  const dstData = dstCtx.createImageData(sz, sz);
-  const dd = dstData.data;
-
-  for (let dy = 0; dy < sz; dy++) {
-    for (let dx = 0; dx < sz; dx++) {
-      // Map (dx,dy) in dst back to src using inv(H)
+  for (let dy=0; dy<outSize; dy++) {
+    for (let dx=0; dx<outSize; dx++) {
       const w2 = inv[6]*dx + inv[7]*dy + inv[8];
       const sx = (inv[0]*dx + inv[1]*dy + inv[2]) / w2;
       const sy = (inv[3]*dx + inv[4]*dy + inv[5]) / w2;
-      const six = Math.round(sx), siy = Math.round(sy);
-      if (six >= 0 && six < sz && siy >= 0 && siy < sz) {
-        const si = (siy * sz + six) * 4;
-        const di = (dy  * sz + dx)  * 4;
-        dd[di]   = sd[si];
-        dd[di+1] = sd[si+1];
-        dd[di+2] = sd[si+2];
-        dd[di+3] = 255;
+      const six=Math.round(sx), siy=Math.round(sy);
+      if (six>=0 && six<srcW && siy>=0 && siy<srcH) {
+        const si=(siy*srcW+six)*4, di=(dy*outSize+dx)*4;
+        dd[di]=sd[si]; dd[di+1]=sd[si+1]; dd[di+2]=sd[si+2]; dd[di+3]=255;
       }
     }
   }
-  dstCtx.putImageData(dstData, 0, 0);
+  return dst;
 }
 
-// ─────────────────────────────────────────────
-// QUAD OVERLAY DRAWING
-// ─────────────────────────────────────────────
+function _gaussElim(A) {
+  const n=A.length;
+  for (let col=0; col<n; col++) {
+    let maxR=col;
+    for (let r=col+1; r<n; r++)
+      if (Math.abs(A[r][col])>Math.abs(A[maxR][col])) maxR=r;
+    [A[col],A[maxR]]=[A[maxR],A[col]];
+    const piv=A[col][col];
+    if (Math.abs(piv)<1e-10) return null;
+    for (let r=0; r<n; r++) {
+      if (r===col) continue;
+      const f=A[r][col]/piv;
+      for (let c=col; c<=n; c++) A[r][c]-=f*A[col][c];
+    }
+    for (let c=col; c<=n; c++) A[col][c]/=piv;
+  }
+  return A.map(r=>r[n]);
+}
 
-function drawQuad(ctx, quad, vw, vh, cr) {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+// ═══════════════════════════════════════════════════════
+// BINARISATION — Otsu global threshold
+// ZXing uses HybridBinarizer (local) but Otsu is robust enough
+// for a well-printed DataMatrix with sufficient contrast
+// ═══════════════════════════════════════════════════════
+function otsuThreshold(grey, w, h) {
+  const hist = new Int32Array(256);
+  for (let i=0; i<grey.length; i++) hist[grey[i]]++;
+  const total = w*h;
+  let sum=0;
+  for (let i=0; i<256; i++) sum+=i*hist[i];
+  let sumB=0, wB=0, max=0, thresh=0;
+  for (let t=0; t<256; t++) {
+    wB+=hist[t]; if(!wB) continue;
+    const wF=total-wB; if(!wF) break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB, mF=(sum-sumB)/wF;
+    const between=wB*wF*(mB-mF)*(mB-mF);
+    if (between>max) { max=between; thresh=t; }
+  }
+  return thresh;
+}
 
-  // Scale quad from video coords to display coords
-  const sx = cr.width / vw, sy = cr.height / vh;
-  const pts = quad.map(([x, y]) => [x * sx, y * sy]);
+function toBitMatrix(grey, w, h, thresh) {
+  const data = new Uint8Array(w*h);
+  for (let i=0; i<grey.length; i++) data[i] = grey[i]<=thresh ? 1 : 0;
+  return new BitMatrix(w, h, data);
+}
 
-  // Animated green outline
-  const t = (Date.now() % 1000) / 1000;
-  ctx.setLineDash([8, 4]);
-  ctx.lineDashOffset = -t * 24;
-  ctx.strokeStyle = '#00e5a0';
-  ctx.lineWidth = 2;
+function toGrey(imageData) {
+  const { data, width, height } = imageData;
+  const out = new Uint8Array(width*height);
+  for (let i=0; i<out.length; i++) {
+    const o=i*4;
+    out[i] = (data[o]*77 + data[o+1]*150 + data[o+2]*29) >> 8;
+  }
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════
+// ORIENTATION — use L-corner (solid sides = fewer transitions)
+// ═══════════════════════════════════════════════════════
+function detectOrientation(corners) {
+  // DMDetector already finds orientation via solid side detection
+  // topLeft = corner of the L (two solid sides meet there for standard DM)
+  // The corners returned are already canonical: TL, BL, BR, TR
+  return 'L-corner at TL (canonical DataMatrix orientation)';
+}
+
+// ═══════════════════════════════════════════════════════
+// APP STATE
+// ═══════════════════════════════════════════════════════
+const video   = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const oCtx    = overlay.getContext('2d');
+const procC   = document.getElementById('proc-c');
+const pCtx    = procC.getContext('2d', { willReadFrequently: true });
+const cropC   = document.getElementById('crop-canvas');
+const cCtx    = cropC.getContext('2d');
+
+const PROC_W=480, PROC_H=270, OUT_SZ=200;
+procC.width=PROC_W; procC.height=PROC_H;
+
+let fCount=0, lastFPS=0, lastFPSt=0;
+let missCount=0;
+
+// ═══════════════════════════════════════════════════════
+// CAMERA
+// ═══════════════════════════════════════════════════════
+async function startCamera() {
+  setStatus('Requesting camera…','#555');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }
+    });
+    video.srcObject = stream;
+    await new Promise(r=>video.addEventListener('loadedmetadata',r,{once:true}));
+    await video.play();
+    setStatus('Scanning…','#ffaa00');
+    requestAnimationFrame(loop);
+  } catch(e) {
+    setStatus('Camera error: '+e.message,'#ff4444');
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN LOOP
+// ═══════════════════════════════════════════════════════
+function loop(ts) {
+  requestAnimationFrame(loop);
+
+  // FPS
+  fCount++;
+  if (ts-lastFPSt >= 1000) {
+    lastFPS=fCount; fCount=0; lastFPSt=ts;
+    document.getElementById('fps').textContent=lastFPS+' fps';
+  }
+
+  const cr = document.getElementById('cam-wrap').getBoundingClientRect();
+  overlay.width=cr.width; overlay.height=cr.height;
+
+  if (video.readyState < 2) return;
+
+  const vw=video.videoWidth, vh=video.videoHeight;
+  const t0=performance.now();
+
+  // ── 1. Downsample to PROC size ──
+  const sc=Math.min(PROC_W/vw, PROC_H/vh);
+  const sw=Math.round(vw*sc), sh=Math.round(vh*sc);
+  pCtx.drawImage(video, 0, 0, sw, sh);
+  const frame = pCtx.getImageData(0, 0, sw, sh);
+
+  // ── 2. Greyscale + Otsu threshold → BitMatrix ──
+  const grey   = toGrey(frame);
+  const thresh = otsuThreshold(grey, sw, sh);
+  const bitmat = toBitMatrix(grey, sw, sh, thresh);
+  const t1=performance.now();
+  setTime('t0', t1-t0);
+
+  // ── 3. ZXing DataMatrix corner detection ──
+  let corners = null;
+  try {
+    const detector = new DMDetector(bitmat);
+    const result   = detector.detectCorners();
+    corners = result;
+  } catch(e) {
+    dbg('ZXing: '+e.message);
+    missCount++;
+    if (missCount>5) clearResult();
+    setTime('t1',performance.now()-t1);
+    return;
+  }
+  const t2=performance.now();
+  missCount=0;
+  setTime('t1', t2-t1);
+  dbg('Found — TL=('+fmt(corners.topLeft)+') TR=('+fmt(corners.topRight)+')');
+
+  // Scale corners back to video coords
+  const isc=1/sc;
+  const tl={x:corners.topLeft.getX()*isc,     y:corners.topLeft.getY()*isc};
+  const tr={x:corners.topRight.getX()*isc,    y:corners.topRight.getY()*isc};
+  const br={x:corners.bottomRight.getX()*isc, y:corners.bottomRight.getY()*isc};
+  const bl={x:corners.bottomLeft.getX()*isc,  y:corners.bottomLeft.getY()*isc};
+
+  // Draw overlay on screen
+  const dsx=cr.width/vw, dsy=cr.height/vh;
+  drawQuad(oCtx,[tl,tr,br,bl],dsx,dsy);
+
+  // ── 4. Perspective warp from full-res frame ──
+  // Draw full video to proc canvas at full size temporarily
+  const fullC = document.createElement('canvas');
+  fullC.width=vw; fullC.height=vh;
+  fullC.getContext('2d').drawImage(video,0,0);
+  const fullData = fullC.getContext('2d').getImageData(0,0,vw,vh);
+
+  const warped = perspectiveWarp(fullData, vw, vh, [tl,tr,br,bl], OUT_SZ);
+  const t3=performance.now();
+  setTime('t2',t3-t2);
+  setTime('tt',t3-t0);
+
+  if (warped) {
+    cCtx.putImageData(warped,0,0);
+    showResult(corners, tl, tr, br, bl);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════
+function drawQuad(ctx, pts, sx, sy) {
+  ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  const scaled = pts.map(p=>({x:p.x*sx, y:p.y*sy}));
+  const t=(Date.now()%800)/800;
+  ctx.save();
+  ctx.setLineDash([8,4]);
+  ctx.lineDashOffset=-t*24;
+  ctx.strokeStyle='#00e5a0';
+  ctx.lineWidth=2.5;
   ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.moveTo(scaled[0].x, scaled[0].y);
+  for(let i=1;i<scaled.length;i++) ctx.lineTo(scaled[i].x,scaled[i].y);
   ctx.closePath();
   ctx.stroke();
   ctx.setLineDash([]);
-
-  // Corner dots
-  ctx.fillStyle = '#00e5a0';
-  for (const [x, y] of pts) {
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI*2);
-    ctx.fill();
-  }
+  ctx.fillStyle='#00e5a0';
+  scaled.forEach(p=>{ ctx.beginPath(); ctx.arc(p.x,p.y,4,0,Math.PI*2); ctx.fill(); });
+  ctx.restore();
 }
 
-// ─────────────────────────────────────────────
-// UI UPDATES
-// ─────────────────────────────────────────────
-
-const ORIENT_LABELS = ['0° — correct', '90° CW', '180°', '270° CW'];
-
-function showResult(rotation, confidence, quad, tDetect, tWarp, tTotal) {
-  document.getElementById('empty-state').style.display  = 'none';
-  document.getElementById('result-canvas').style.display = 'block';
-  document.getElementById('result-info').style.display   = 'flex';
-
-  const orientEl = document.getElementById('r-orient');
-  orientEl.textContent = ORIENT_LABELS[rotation];
-  orientEl.className = 'info-val ' + (rotation === 0 ? 'good' : 'warn');
-
-  const confEl = document.getElementById('r-conf');
-  confEl.textContent = confidence + '%';
-  confEl.className = 'info-val ' + (confidence > 60 ? 'good' : confidence > 30 ? 'warn' : 'idle');
-
-  const sz = Math.round(
-    Math.hypot(quad[1][0]-quad[0][0], quad[1][1]-quad[0][1])
-  );
-  document.getElementById('r-size').textContent = sz + ' px';
-
-  const now = new Date();
-  document.getElementById('r-time').textContent =
-    now.toLocaleTimeString('en-GB', { hour12: false });
-
-  updateTiming(tDetect, tWarp, tTotal);
-  setStatus('Detected', 'found');
+function showResult(corners, tl, tr, br, bl) {
+  document.getElementById('empty').style.display='none';
+  cropC.style.display='block';
+  document.getElementById('info').style.display='flex';
+  const sz=Math.round(MathUtils.distance(tl.x,tl.y,tr.x,tr.y));
+  document.getElementById('i-corners').textContent=
+    `TL(${Math.round(tl.x)},${Math.round(tl.y)})`;
+  document.getElementById('i-size').textContent=sz+'px wide';
+  document.getElementById('i-rot').textContent='Canonical (ZXing L-corner)';
+  document.getElementById('i-time').textContent=
+    new Date().toLocaleTimeString('en-GB',{hour12:false});
+  setStatus('Detected','#00e5a0');
 }
 
-function updateTiming(tDetect, tWarp, tTotal) {
-  const fmt = v => v != null ? v.toFixed(1) + 'ms' : '—';
-  document.getElementById('t-detect').textContent = fmt(tDetect);
-  document.getElementById('t-warp').textContent   = fmt(tWarp);
-  const tot = document.getElementById('t-total');
-  tot.textContent = fmt(tTotal);
-  if (tTotal != null) {
-    tot.className = 't-val ' + (tTotal < 16 ? 'accent' : '');
-  }
+function clearResult() {
+  document.getElementById('empty').style.display='flex';
+  cropC.style.display='none';
+  document.getElementById('info').style.display='none';
+  oCtx.clearRect(0,0,overlay.width,overlay.height);
+  setStatus('Scanning…','#ffaa00');
 }
 
-function setStatus(text, state) {
-  document.getElementById('status-text').textContent = text;
-  const dot = document.getElementById('status-dot');
-  dot.className = 'status-dot ' + state;
-  // Use id not class for the dot
-  dot.id = 'status-dot';
-  dot.style.background =
-    state === 'found'    ? 'var(--accent)' :
-    state === 'scanning' ? 'var(--amber)'  : 'var(--text-muted)';
-  dot.style.animation =
-    state === 'scanning' ? 'pulse 1.2s ease-in-out infinite' : 'none';
+function setStatus(txt,col) {
+  document.getElementById('stxt').textContent=txt;
+  document.getElementById('dot').style.background=col;
 }
 
-// ─────────────────────────────────────────────
-// BOOT
-// ─────────────────────────────────────────────
+function setTime(id, ms) {
+  const el=document.getElementById(id);
+  if (el) el.textContent = ms!=null ? ms.toFixed(1)+'ms' : '—';
+}
+
+function dbg(msg) { document.getElementById('dbg').textContent=msg; }
+function fmt(rp) { return Math.round(rp.getX())+','+Math.round(rp.getY()); }
+
+// ── Boot ──
 startCamera();
 </script>
 </body>
