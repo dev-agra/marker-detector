@@ -65,7 +65,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector</h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v5</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -297,9 +297,9 @@ class WhiteRectangleDetector {
 // Direct port of zxing-js datamatrix/detector/Detector.ts
 // Only change: detect() returns corners instead of sampling bits
 class DMDetector {
-  constructor(image) {
+  constructor(image, initSize) {
     this.image = image;
-    this.rectDetector = new WhiteRectangleDetector(image);
+    this.rectDetector = new WhiteRectangleDetector(image, initSize || 10);
   }
 
   // Returns { topLeft, bottomLeft, bottomRight, topRight } ResultPoints
@@ -608,13 +608,29 @@ function loop(ts) {
   const grey   = toGrey(frame);
   const thresh = otsuThreshold(grey, sw, sh);
   const bitmat = toBitMatrix(grey, sw, sh, thresh);
+
+  // Ensure a white quiet zone at frame edges so WRD terminates correctly
+  // (clears 8px border of the bitmatrix to white = 0)
+  const QZ = 8;
+  for (let y=0; y<sh; y++) {
+    for (let x=0; x<sw; x++) {
+      if (x<QZ || x>=sw-QZ || y<QZ || y>=sh-QZ) {
+        bitmat._data[y*sw+x] = 0; // force white
+      }
+    }
+  }
   const t1=performance.now();
   setTime('t0', t1-t0);
 
   // ── 3. ZXing DataMatrix corner detection ──
   let corners = null;
   try {
-    const detector = new DMDetector(bitmat);
+    // Pass a larger initSize so WhiteRectangleDetector starts from
+    // well outside the marker center and finds the OUTER white region
+    // (the quiet zone white) not the inner white data area
+    // initSize: start WRD search from center with a small region
+    // it expands outward until it finds the white interior bounded by black
+    const detector = new DMDetector(bitmat, 10);
     const result   = detector.detectCorners();
     corners = result;
   } catch(e) {
@@ -642,7 +658,7 @@ function loop(ts) {
   const detectedH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
   // Use average size for expansion
   const avgSz = (detectedW + detectedH) / 2;
-  const expand = avgSz * 0.06; // 6% = 3% border + 3% quiet zone each side
+  const expand = avgSz * 0.18; // ~18% — timing border is thick relative to inner
 
   // Compute center of quad
   const cx = (tl.x+tr.x+br.x+bl.x)/4;
