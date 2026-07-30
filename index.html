@@ -80,7 +80,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v15</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v16</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -997,21 +997,33 @@ function drawDebugPanel(bitmat, w, h, bbox, edgeClasses, inset, accepted) {
   dCtx.clearRect(0,0,cw,ch);
 
   // ZOOM into the candidate region (bbox + generous padding) instead of
-  // showing the whole frame — this is what makes it useful for debugging
-  // the actual anchor/border area rather than the entire camera view.
+  // showing the whole frame. The crop region is forced SQUARE (using the
+  // larger of width/height, padded equally) so the debug canvas never
+  // shows a letterboxed/distorted rectangle regardless of the bbox's
+  // actual aspect ratio.
   let cropL, cropT, cropR, cropB;
   if (bbox && bbox.left>=0) {
+    const bcx = (bbox.left+bbox.right)/2, bcy = (bbox.top+bbox.bottom)/2;
     const bw = bbox.right-bbox.left, bh = bbox.bottom-bbox.top;
-    const pad = Math.round(Math.max(bw,bh) * 0.35); // 35% padding around candidate
-    cropL = Math.max(0, bbox.left - pad);
-    cropT = Math.max(0, bbox.top  - pad);
-    cropR = Math.min(w, bbox.right  + pad);
-    cropB = Math.min(h, bbox.bottom + pad);
+    const half = Math.round(Math.max(bw,bh) * 0.65); // half-size incl. padding
+    cropL = Math.max(0, bcx - half);
+    cropT = Math.max(0, bcy - half);
+    cropR = Math.min(w, bcx + half);
+    cropB = Math.min(h, bcy + half);
+    // If clamped against frame edge, re-square by pulling the opposite
+    // side in rather than leaving a non-square crop
+    const finalW = cropR-cropL, finalH = cropB-cropT;
+    if (finalW !== finalH) {
+      const side = Math.min(finalW, finalH);
+      cropR = cropL + side;
+      cropB = cropT + side;
+    }
   } else {
-    // No candidate at all — zoom to center 40% of frame (where guide box is)
-    // rather than the whole scene, since that's what the user is aiming at.
-    cropL = Math.round(w*0.30); cropR = Math.round(w*0.70);
-    cropT = Math.round(h*0.30); cropB = Math.round(h*0.70);
+    // No candidate — zoom to center square region matching the guide box
+    const side = Math.round(Math.min(w,h) * 0.4);
+    const cx = w/2, cy = h/2;
+    cropL = Math.round(cx - side/2); cropR = cropL + side;
+    cropT = Math.round(cy - side/2); cropB = cropT + side;
   }
   const cropW = cropR-cropL, cropH = cropB-cropT;
   const scale = Math.min(cw/cropW, ch/cropH);
@@ -1051,20 +1063,31 @@ function drawDebugPanel(bitmat, w, h, bbox, edgeClasses, inset, accepted) {
     const colorFor = c => c==='solid' ? '#00e5a0' : c==='alternating' ? '#3ea6ff' : '#ff4444';
     const { il, it, ir, ib } = inset;
     const lines = [
-      [il,it,ir,it, edgeClasses.top],
-      [il,ib,ir,ib, edgeClasses.bottom],
-      [il,it,il,ib, edgeClasses.left],
-      [ir,it,ir,ib, edgeClasses.right],
+      [il,it,ir,it, edgeClasses.top,    'T', (il+ir)/2, it],
+      [il,ib,ir,ib, edgeClasses.bottom, 'B', (il+ir)/2, ib],
+      [il,it,il,ib, edgeClasses.left,   'L', il, (it+ib)/2],
+      [ir,it,ir,ib, edgeClasses.right,  'R', ir, (it+ib)/2],
     ];
-    for (const [x1,y1,x2,y2,cls] of lines) {
+    dCtx.font = 'bold 11px monospace';
+    dCtx.textAlign = 'center';
+    dCtx.textBaseline = 'middle';
+    for (const [x1,y1,x2,y2,cls,label,lx,ly] of lines) {
       const [cx1,cy1] = toCanvas(x1,y1);
       const [cx2,cy2] = toCanvas(x2,y2);
-      dCtx.strokeStyle = colorFor(cls);
+      const col = colorFor(cls);
+      dCtx.strokeStyle = col;
       dCtx.lineWidth = 2.5;
       dCtx.beginPath();
       dCtx.moveTo(cx1,cy1);
       dCtx.lineTo(cx2,cy2);
       dCtx.stroke();
+      // Explicit T/B/L/R label so there's no ambiguity about which
+      // line corresponds to which side of the marker.
+      const [lcx,lcy] = toCanvas(lx,ly);
+      dCtx.fillStyle = '#000';
+      dCtx.fillRect(lcx-8, lcy-8, 16, 16);
+      dCtx.fillStyle = col;
+      dCtx.fillText(label, lcx, lcy);
     }
   }
 
