@@ -80,7 +80,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v14</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v15</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -664,38 +664,113 @@ function loop(ts) {
 
   // ── 3. COMBINED DETECTION ──
   // ZXing's WhiteRectangleDetector traces exact black/white transitions,
-  // which breaks on thick blocky timing-strip dots (large gaps between
-  // large dots confuse transition-counting). A row/column density scan
-  // is far more robust for THIS marker style — it just measures how much
-  // of each row/column is black, which handles blocky borders correctly
-  // regardless of scale. ZXing is still used, but only on the cropped
-  // region, purely to determine orientation (which corner is TL).
-
+  // which breaks on thick blocky timing-strip dots. A coarse-grid
+  // connected-component scan is more robust: it divides the frame into
+  // small blocks, marks blocks with meaningful black density as "active",
+  // dilates slightly to bridge a SINGLE marker's own internal gaps
+  // (white square, spacing between dots), then flood-fills to find
+  // distinct connected regions — picking whichever is closest to center.
+  // This correctly handles two failure modes verified in testing:
+  //   1. Two separate markers with a gap between them (dilation is small
+  //      enough to NOT bridge that gap — they stay separate components)
+  //   2. A single marker's internal structure (border/dots/anchor/noise
+  //      are disconnected black regions, but dilation bridges them into
+  //      one component since the gaps between them are much smaller than
+  //      the gap between separate markers)
   function findBoundingBox(bitmat, w, h) {
-    // Restrict the scan to the guide-box region (center ~70% of frame).
-    // Without this, partial markers or clutter visible at the frame edges
-    // (e.g. neighboring markers on a printed sheet) contribute to the row/
-    // column sums and skew the detected shape — this was the root cause
-    // of the "135x253" wrong-shape rejection: content outside the intended
-    // marker was inflating row density for rows that shouldn't count.
-    const margin = 0.15; // exclude outer 15% on each side
+    const margin = 0.15;
     const x0 = Math.round(w*margin), x1 = Math.round(w*(1-margin));
     const y0 = Math.round(h*margin), y1 = Math.round(h*(1-margin));
 
-    const rowSum = new Int32Array(h);
-    const colSum = new Int32Array(w);
-    for (let y=y0; y<y1; y++)
-      for (let x=x0; x<x1; x++)
-        if (bitmat.get(x,y)) { rowSum[y]++; colSum[x]++; }
-    let maxRow=0, maxCol=0;
-    for (let i=y0;i<y1;i++) if(rowSum[i]>maxRow) maxRow=rowSum[i];
-    for (let i=x0;i<x1;i++) if(colSum[i]>maxCol) maxCol=colSum[i];
-    const rowThresh = maxRow * 0.15;
-    const colThresh = maxCol * 0.15;
-    let top=-1, bottom=-1, left=-1, right=-1;
-    for (let y=y0;y<y1;y++) if(rowSum[y]>=rowThresh){ if(top<0) top=y; bottom=y; }
-    for (let x=x0;x<x1;x++) if(colSum[x]>=colThresh){ if(left<0) left=x; right=x; }
-    return {left, right, top, bottom};
+    const BLOCK = Math.max(4, Math.round(Math.min(w,h) * 0.02));
+    const gw = Math.ceil((x1-x0)/BLOCK), gh = Math.ceil((y1-y0)/BLOCK);
+    const density = new Float32Array(gw*gh);
+
+    for (let gy=0; gy<gh; gy++) {
+      for (let gx=0; gx<gw; gx++) {
+        let black=0, total=0;
+        const bx0=x0+gx*BLOCK, by0=y0+gy*BLOCK;
+        for (let y=by0; y<Math.min(by0+BLOCK,y1); y++)
+          for (let x=bx0; x<Math.min(bx0+BLOCK,x1); x++)
+            { if(bitmat.get(x,y)) black++; total++; }
+        density[gy*gw+gx] = total>0 ? black/total : 0;
+      }
+    }
+
+    const ACTIVE_THRESH = 0.06;
+    const activeOrig = new Uint8Array(gw*gh);
+    for (let i=0;i<density.length;i++) activeOrig[i] = density[i]>ACTIVE_THRESH ? 1 : 0;
+
+    const DILATE_R = Math.max(2, Math.round(Math.min(gw,gh) * 0.06));
+    function dilate(grid, gw, gh, r) {
+      const out = new Uint8Array(gw*gh);
+      for (let gy=0; gy<gh; gy++) for (let gx=0; gx<gw; gx++) {
+        if (grid[gy*gw+gx]) { out[gy*gw+gx]=1; continue; }
+        let found=false;
+        for (let dy=-r; dy<=r && !found; dy++)
+          for (let dx=-r; dx<=r && !found; dx++) {
+            const nx=gx+dx, ny=gy+dy;
+            if (nx>=0&&nx<gw&&ny>=0&&ny<gh&&grid[ny*gw+nx]) found=true;
+          }
+        out[gy*gw+gx]=found?1:0;
+      }
+      return out;
+    }
+    const activeDilated = dilate(activeOrig, gw, gh, DILATE_R);
+
+    // Flood-fill using the DILATED grid for connectivity (bridges a single
+    // marker's internal gaps), but measure the final bbox extent using
+    // only ORIGINALLY-active cells (dilation is for connectivity only,
+    // not for inflating the measured size beyond the true marker extent).
+    const visited = new Uint8Array(gw*gh);
+    const components = [];
+    for (let gy=0; gy<gh; gy++) {
+      for (let gx=0; gx<gw; gx++) {
+        const idx = gy*gw+gx;
+        if (activeDilated[idx] && !visited[idx]) {
+          const stack=[[gx,gy]]; visited[idx]=1;
+          const cells=[];
+          while(stack.length) {
+            const [cx,cy]=stack.pop();
+            cells.push([cx,cy]);
+            for (const [nx,ny] of [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]]) {
+              if (nx>=0&&nx<gw&&ny>=0&&ny<gh) {
+                const nidx=ny*gw+nx;
+                if (activeDilated[nidx] && !visited[nidx]) { visited[nidx]=1; stack.push([nx,ny]); }
+              }
+            }
+          }
+          let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity, origCount=0;
+          for (const [cx,cy] of cells) {
+            if (activeOrig[cy*gw+cx]) {
+              minX=Math.min(minX,cx); maxX=Math.max(maxX,cx);
+              minY=Math.min(minY,cy); maxY=Math.max(maxY,cy);
+              origCount++;
+            }
+          }
+          if (origCount>0) components.push({minX,maxX,minY,maxY,count:origCount});
+        }
+      }
+    }
+
+    if (components.length===0) return {left:-1,right:-1,top:-1,bottom:-1};
+
+    // Pick whichever connected component is closest to frame center —
+    // that's the one the guide box is pointing at.
+    const centerGX=gw/2, centerGY=gh/2;
+    let best=components[0], bestDist=Infinity;
+    for (const c of components) {
+      const midX=(c.minX+c.maxX)/2, midY=(c.minY+c.maxY)/2;
+      const dist=Math.hypot(midX-centerGX, midY-centerGY);
+      if (dist<bestDist) { bestDist=dist; best=c; }
+    }
+
+    return {
+      left:   x0+best.minX*BLOCK,
+      right:  x0+(best.maxX+1)*BLOCK,
+      top:    y0+best.minY*BLOCK,
+      bottom: y0+(best.maxY+1)*BLOCK,
+    };
   }
 
   const bbox = findBoundingBox(bitmat, sw, sh);
