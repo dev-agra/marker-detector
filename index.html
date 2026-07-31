@@ -93,7 +93,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v17</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v18</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -700,158 +700,76 @@ function loop(ts) {
   const t1=performance.now();
   setTime('t0', t1-t0);
 
-  // ── 3. COMBINED DETECTION ──
-  // ZXing's WhiteRectangleDetector traces exact black/white transitions,
-  // which breaks on thick blocky timing-strip dots. A coarse-grid
-  // connected-component scan is more robust: it divides the frame into
-  // small blocks, marks blocks with meaningful black density as "active",
-  // dilates slightly to bridge a SINGLE marker's own internal gaps
-  // (white square, spacing between dots), then flood-fills to find
-  // distinct connected regions — picking whichever is closest to center.
-  // This correctly handles two failure modes verified in testing:
-  //   1. Two separate markers with a gap between them (dilation is small
-  //      enough to NOT bridge that gap — they stay separate components)
-  //   2. A single marker's internal structure (border/dots/anchor/noise
-  //      are disconnected black regions, but dilation bridges them into
-  //      one component since the gaps between them are much smaller than
-  //      the gap between separate markers)
-  function findBoundingBox(bitmat, w, h) {
-    const margin = 0.15;
-    const x0 = Math.round(w*margin), x1 = Math.round(w*(1-margin));
-    const y0 = Math.round(h*margin), y1 = Math.round(h*(1-margin));
+  // ── 3. DETECTION — ZXing transition-counting is PRIMARY ──
+  // Production markers are isolated on packaging with clear space around
+  // them (not packed against neighbors like earlier test sheets), so the
+  // flood-fill/dilation scaffolding from earlier versions was solving a
+  // problem that doesn't exist in production and is removed entirely.
+  //
+  // ZXing's WhiteRectangleDetector + solid/alternating transition counting
+  // is rotation-invariant BY MEASUREMENT: it walks each of the 4 sides of
+  // a candidate quad and counts black/white transitions. Whichever 2
+  // ADJACENT sides have the fewest transitions are called "solid" (your
+  // thick border), the other 2 are "alternating" (your dotted timing
+  // strip) — this is measured fresh every frame, regardless of how the
+  // marker is physically rotated in front of the camera.
+  const guideCx = sw >> 1;
+  const guideCy = sh >> 1;
+  // initSize must be large enough that the starting search cross-section
+  // can't land entirely inside a gap between timing-strip dots (verified
+  // empirically earlier: fixed 10px fails, 15%+ of frame dimension works
+  // reliably across both full-scale and tiny/far-away marker sizes).
+  const initSize = Math.max(24, Math.round(Math.min(sw, sh) * 0.15));
 
-    const BLOCK = Math.max(4, Math.round(Math.min(w,h) * 0.02));
-    const gw = Math.ceil((x1-x0)/BLOCK), gh = Math.ceil((y1-y0)/BLOCK);
-    const density = new Float32Array(gw*gh);
-
-    for (let gy=0; gy<gh; gy++) {
-      for (let gx=0; gx<gw; gx++) {
-        let black=0, total=0;
-        const bx0=x0+gx*BLOCK, by0=y0+gy*BLOCK;
-        for (let y=by0; y<Math.min(by0+BLOCK,y1); y++)
-          for (let x=bx0; x<Math.min(bx0+BLOCK,x1); x++)
-            { if(bitmat.get(x,y)) black++; total++; }
-        density[gy*gw+gx] = total>0 ? black/total : 0;
-      }
-    }
-
-    const ACTIVE_THRESH = 0.06;
-    const activeOrig = new Uint8Array(gw*gh);
-    for (let i=0;i<density.length;i++) activeOrig[i] = density[i]>ACTIVE_THRESH ? 1 : 0;
-
-    const DILATE_R = Math.max(2, Math.round(Math.min(gw,gh) * 0.06));
-    function dilate(grid, gw, gh, r) {
-      const out = new Uint8Array(gw*gh);
-      for (let gy=0; gy<gh; gy++) for (let gx=0; gx<gw; gx++) {
-        if (grid[gy*gw+gx]) { out[gy*gw+gx]=1; continue; }
-        let found=false;
-        for (let dy=-r; dy<=r && !found; dy++)
-          for (let dx=-r; dx<=r && !found; dx++) {
-            const nx=gx+dx, ny=gy+dy;
-            if (nx>=0&&nx<gw&&ny>=0&&ny<gh&&grid[ny*gw+nx]) found=true;
-          }
-        out[gy*gw+gx]=found?1:0;
-      }
-      return out;
-    }
-    const activeDilated = dilate(activeOrig, gw, gh, DILATE_R);
-
-    // Flood-fill using the DILATED grid for connectivity (bridges a single
-    // marker's internal gaps), but measure the final bbox extent using
-    // only ORIGINALLY-active cells (dilation is for connectivity only,
-    // not for inflating the measured size beyond the true marker extent).
-    const visited = new Uint8Array(gw*gh);
-    const components = [];
-    for (let gy=0; gy<gh; gy++) {
-      for (let gx=0; gx<gw; gx++) {
-        const idx = gy*gw+gx;
-        if (activeDilated[idx] && !visited[idx]) {
-          const stack=[[gx,gy]]; visited[idx]=1;
-          const cells=[];
-          while(stack.length) {
-            const [cx,cy]=stack.pop();
-            cells.push([cx,cy]);
-            for (const [nx,ny] of [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]]) {
-              if (nx>=0&&nx<gw&&ny>=0&&ny<gh) {
-                const nidx=ny*gw+nx;
-                if (activeDilated[nidx] && !visited[nidx]) { visited[nidx]=1; stack.push([nx,ny]); }
-              }
-            }
-          }
-          let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity, origCount=0;
-          for (const [cx,cy] of cells) {
-            if (activeOrig[cy*gw+cx]) {
-              minX=Math.min(minX,cx); maxX=Math.max(maxX,cx);
-              minY=Math.min(minY,cy); maxY=Math.max(maxY,cy);
-              origCount++;
-            }
-          }
-          if (origCount>0) components.push({minX,maxX,minY,maxY,count:origCount});
-        }
-      }
-    }
-
-    if (components.length===0) return {left:-1,right:-1,top:-1,bottom:-1};
-
-    // Pick whichever connected component is closest to frame center —
-    // that's the one the guide box is pointing at.
-    const centerGX=gw/2, centerGY=gh/2;
-    let best=components[0], bestDist=Infinity;
-    for (const c of components) {
-      const midX=(c.minX+c.maxX)/2, midY=(c.minY+c.maxY)/2;
-      const dist=Math.hypot(midX-centerGX, midY-centerGY);
-      if (dist<bestDist) { bestDist=dist; best=c; }
-    }
-
-    return {
-      left:   x0+best.minX*BLOCK,
-      right:  x0+(best.maxX+1)*BLOCK,
-      top:    y0+best.minY*BLOCK,
-      bottom: y0+(best.maxY+1)*BLOCK,
-    };
-  }
-
-  const bbox = findBoundingBox(bitmat, sw, sh);
-  if (bbox.left<0 || bbox.right<0 || bbox.top<0 || bbox.bottom<0) {
+  let tl, tr, br, bl;
+  try {
+    const detector = new DMDetector(bitmat, initSize, guideCx, guideCy);
+    const result = detector.detectCorners();
+    tl = { x: result.topLeft.getX(),     y: result.topLeft.getY()     };
+    tr = { x: result.topRight.getX(),    y: result.topRight.getY()    };
+    br = { x: result.bottomRight.getX(), y: result.bottomRight.getY() };
+    bl = { x: result.bottomLeft.getX(),  y: result.bottomLeft.getY()  };
+  } catch(e) {
     drawDebugPanel(bitmat, sw, sh, null, null, null, false);
-    dbg('No marker-like region found');
+    dbg('No marker found — ' + e.message);
     missCount++;
     if (missCount>5) clearResult();
-    setTime('t1',performance.now()-t1);
+    setTime('t1', performance.now()-t1);
     return;
   }
+  const t2 = performance.now();
 
-  const qW = bbox.right - bbox.left;
-  const qH = bbox.bottom - bbox.top;
+  // ── Sanity checks on the found quad ──
+  const qW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
+  const qH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
+  const bboxForDebug = {
+    left:   Math.min(tl.x,tr.x,br.x,bl.x),
+    right:  Math.max(tl.x,tr.x,br.x,bl.x),
+    top:    Math.min(tl.y,tr.y,br.y,bl.y),
+    bottom: Math.max(tl.y,tr.y,br.y,bl.y),
+  };
 
-  // Reject false positives: too small, too large, or not roughly square
-  if (qW < sw*0.10 || qW > sw*0.90 || qH < sh*0.10 || qH > sh*0.90) {
-    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
-    dbg('Rejected — size out of range ('+qW+'x'+qH+')');
+  if (qW < sw*0.08 || qW > sw*0.95 || qH < sh*0.08 || qH > sh*0.95) {
+    drawDebugPanel(bitmat, sw, sh, bboxForDebug, null, null, false);
+    dbg('Rejected — size out of range ('+qW.toFixed(0)+'x'+qH.toFixed(0)+')');
     missCount++;
     if (missCount>5) clearResult();
-    setTime('t1',performance.now()-t1);
+    setTime('t1', performance.now()-t1);
     return;
   }
   const aspect = qW/qH;
   if (aspect < 0.7 || aspect > 1.43) {
-    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
+    drawDebugPanel(bitmat, sw, sh, bboxForDebug, null, null, false);
     dbg('Rejected — not square (aspect='+aspect.toFixed(2)+')');
     missCount++;
     if (missCount>5) clearResult();
-    setTime('t1',performance.now()-t1);
+    setTime('t1', performance.now()-t1);
     return;
   }
 
-  // ── STRUCTURAL SIGNATURE CHECK ──
-  // Generic size/aspect checks alone accept ANY square high-contrast blob
-  // (bookshelves, laptops, clutter all pass those). This marker has a very
-  // specific signature: 2 sides with ONE continuous solid black run
-  // (the L-border), and 2 sides with MULTIPLE similar-sized black segments
-  // (the timing-strip dots) — OR all 4 sides solid for uniform-border
-  // designs. Real-world background clutter essentially never reproduces
-  // this exact combination. Verified: real marker (both full-scale and
-  // tiny/phone-scale) → passes; random noise/clutter → fails.
+  // ── Structural signature check as a CONFIDENCE GATE on ZXing's own
+  // corners (not a separate detection method) — confirms the found quad
+  // genuinely has 2 solid + 2 alternating sides before we trust it. ──
   function analyzeEdgeLine(x1,y1,x2,y2) {
     const steps = Math.max(Math.abs(x2-x1), Math.abs(y2-y1));
     const segs = []; let inBlack=false, runStart=0;
@@ -873,82 +791,38 @@ function loop(ts) {
   }
 
   const sigInset = Math.max(3, Math.round(Math.min(qW,qH) * 0.07));
-  const il=bbox.left+sigInset, ir=bbox.right-sigInset;
-  const it=bbox.top+sigInset,  ib=bbox.bottom-sigInset;
-  let isMarkerLike = false;
+  const il=bboxForDebug.left+sigInset, ir=bboxForDebug.right-sigInset;
+  const it=bboxForDebug.top+sigInset,  ib=bboxForDebug.bottom-sigInset;
+  let isMarkerLike = false, cTop='other', cBottom='other', cLeft='other', cRight='other';
   if (ir>il && ib>it) {
     const hLen=ir-il, vLen=ib-it;
-    const cTop    = classifyEdgeSegs(analyzeEdgeLine(il,it,ir,it), hLen);
-    const cBottom = classifyEdgeSegs(analyzeEdgeLine(il,ib,ir,ib), hLen);
-    const cLeft   = classifyEdgeSegs(analyzeEdgeLine(il,it,il,ib), vLen);
-    const cRight  = classifyEdgeSegs(analyzeEdgeLine(ir,it,ir,ib), vLen);
+    cTop    = classifyEdgeSegs(analyzeEdgeLine(il,it,ir,it), hLen);
+    cBottom = classifyEdgeSegs(analyzeEdgeLine(il,ib,ir,ib), hLen);
+    cLeft   = classifyEdgeSegs(analyzeEdgeLine(il,it,il,ib), vLen);
+    cRight  = classifyEdgeSegs(analyzeEdgeLine(ir,it,ir,ib), vLen);
     const classes = [cTop,cBottom,cLeft,cRight];
     const solidCount = classes.filter(c=>c==='solid').length;
     const altCount = classes.filter(c=>c==='alternating').length;
     const emptyCount = classes.filter(c=>c==='empty').length;
     isMarkerLike = emptyCount===0 && ((solidCount>=2 && altCount>=1) || solidCount>=3);
+  }
 
-    // Always render the debug panel — shows exactly what the algorithm
-    // is seeing and why it accepted/rejected, regardless of outcome.
-    drawDebugPanel(bitmat, sw, sh, bbox, {top:cTop,bottom:cBottom,left:cLeft,right:cRight},
-                    {il,it,ir,ib}, isMarkerLike);
+  drawDebugPanel(bitmat, sw, sh, bboxForDebug,
+                 {top:cTop,bottom:cBottom,left:cLeft,right:cRight},
+                 {il,it,ir,ib}, isMarkerLike);
 
-    if (!isMarkerLike) {
-      dbg('Rejected — no border signature (top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight+')');
-      missCount++;
-      if (missCount>5) clearResult();
-      setTime('t1',performance.now()-t1);
-      return;
-    }
-  } else {
-    drawDebugPanel(bitmat, sw, sh, bbox, null, null, false);
-    dbg('Rejected — too small for signature check');
+  if (!isMarkerLike) {
+    dbg('Rejected — no border signature (top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight+')');
     missCount++;
     if (missCount>5) clearResult();
-    setTime('t1',performance.now()-t1);
+    setTime('t1', performance.now()-t1);
     return;
   }
 
-  const t2=performance.now();
   missCount=0;
   setTime('t1', t2-t1);
-
-  // Default axis-aligned corners from the bounding box
-  let tl={x:bbox.left,  y:bbox.top};
-  let tr={x:bbox.right, y:bbox.top};
-  let br={x:bbox.right, y:bbox.bottom};
-  let bl={x:bbox.left,  y:bbox.bottom};
-
-  // Try ZXing purely for orientation (which corner is the true TL) —
-  // failure here is non-fatal, we just keep default orientation.
-  let orientLabel = 'default (ZXing unavailable)';
-  try {
-    const bcx = Math.round((bbox.left+bbox.right)/2);
-    const bcy = Math.round((bbox.top+bbox.bottom)/2);
-    const gInit = Math.max(20, Math.round(qW * 0.3));
-    const zDetector = new DMDetector(bitmat, gInit, bcx, bcy);
-    const zResult = zDetector.detectCorners();
-    const ztl = {x:zResult.topLeft.getX(), y:zResult.topLeft.getY()};
-    // Find which bbox corner is nearest to ZXing's detected TL —
-    // that tells us the true rotation of the marker.
-    const bboxCorners = [
-      {x:bbox.left,  y:bbox.top,    label:'TL', arr:[tl,tr,br,bl]},
-      {x:bbox.right, y:bbox.top,    label:'TR', arr:[tr,br,bl,tl]},
-      {x:bbox.right, y:bbox.bottom, label:'BR', arr:[br,bl,tl,tr]},
-      {x:bbox.left,  y:bbox.bottom, label:'BL', arr:[bl,tl,tr,br]},
-    ];
-    let nearest = bboxCorners[0], minDist = Infinity;
-    for (const c of bboxCorners) {
-      const d = MathUtils.distance(ztl.x, ztl.y, c.x, c.y);
-      if (d < minDist) { minDist = d; nearest = c; }
-    }
-    [tl, tr, br, bl] = nearest.arr;
-    orientLabel = nearest.label + ' (ZXing-confirmed)';
-  } catch(e) {
-    orientLabel = 'default (ZXing: '+e.message+')';
-  }
-
-  dbg('bbox='+qW+'x'+qH+' orient='+orientLabel);
+  dbg('Detected — size='+qW.toFixed(0)+'x'+qH.toFixed(0)+
+      ' top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight);
 
   // Draw overlay — scale from downsampled (sw,sh) coords to display coords
   const dsx=cr.width/sw, dsy=cr.height/sh;
