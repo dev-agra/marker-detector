@@ -49,17 +49,30 @@
   #dbg { padding:5px 16px; font-size:11px; font-family:monospace;
     color:var(--muted); border-bottom:1px solid var(--border); min-height:26px; }
 
-  #result-area { display:flex; align-items:center; gap:16px; padding:14px 16px; min-height:120px; }
+  #capture-progress { padding:10px 16px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:10px; }
+  #capture-bar-track { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+  #capture-bar-fill { height:100%; width:0%; background:var(--accent);
+    border-radius:3px; transition:width .15s ease; }
+  #capture-progress-text { font-size:11px; font-family:monospace; color:var(--accent);
+    white-space:nowrap; min-width:110px; }
+
+  #result-area { display:flex; align-items:center; gap:16px; padding:14px 16px; min-height:120px;
+    flex-wrap:wrap; position:relative; }
   #empty { display:flex; flex-direction:column; align-items:center; gap:6px;
     color:var(--muted); font-size:13px; width:100%; }
   #empty-icon { font-size:28px; opacity:.25; }
-  #crop-canvas { width:100px; height:100px; border:1px solid var(--border);
-    border-radius:6px; image-rendering:pixelated; display:none; }
-  #info { flex:1; display:flex; flex-direction:column; gap:7px; display:none; }
+  #crop-canvas { width:100px; height:100px; border:1px solid var(--accent);
+    border-radius:6px; image-rendering:pixelated; display:none; box-shadow:0 0 0 3px rgba(0,229,160,0.15); }
+  #info { flex:1; display:flex; flex-direction:column; gap:7px; display:none; min-width:140px; }
   .ir { display:flex; flex-direction:column; gap:2px; }
   .il { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); }
   .iv { font-size:13px; font-family:monospace; color:var(--text); }
   .iv.g { color:var(--accent); }
+  #reset-btn { width:100%; margin-top:4px; padding:9px; background:var(--surface);
+    border:1px solid var(--border); border-radius:8px; color:var(--text);
+    font-size:13px; font-family:inherit; cursor:pointer; }
+  #reset-btn:active { background:var(--border); }
 
   #proc-c { display:none; }
 
@@ -80,7 +93,7 @@
 <body>
 <div id="app">
   <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v16</span></h1>
+    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v17</span></h1>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
       <div id="dot"></div>
@@ -105,6 +118,10 @@
       <span id="fps">— fps</span>
     </div>
     <div id="dbg">Waiting…</div>
+    <div id="capture-progress" style="display:none">
+      <div id="capture-bar-track"><div id="capture-bar-fill"></div></div>
+      <span id="capture-progress-text">Capturing 0/15…</span>
+    </div>
     <div id="result-area">
       <div id="empty"><div id="empty-icon">◻</div><span>Point at DataMatrix marker</span></div>
       <canvas id="crop-canvas" width="200" height="200"></canvas>
@@ -114,6 +131,7 @@
         <div class="ir"><span class="il">Orientation</span><span class="iv g" id="i-rot">—</span></div>
         <div class="ir"><span class="il">Captured</span><span class="iv" id="i-time">—</span></div>
       </div>
+      <button id="reset-btn" style="display:none">Scan again</button>
     </div>
   </div>
 
@@ -590,6 +608,26 @@ let fCount=0, lastFPS=0, lastFPSt=0;
 let missCount=0;
 
 // ═══════════════════════════════════════════════════════
+// MULTI-FRAME CAPTURE STATE MACHINE
+// scanning -> capturing (collecting N good frames) -> done (locked result)
+// Once locked, further frames are ignored until reset.
+// ═══════════════════════════════════════════════════════
+const CAPTURE_TARGET = 15;
+let phase = 'scanning';      // 'scanning' | 'capturing' | 'done'
+let capturedFrames = [];     // array of ImageData, all same orientation/size
+let captureMeta = null;      // last good corners/orientation info for display
+
+document.getElementById('reset-btn').addEventListener('click', () => {
+  phase = 'scanning';
+  capturedFrames = [];
+  captureMeta = null;
+  document.getElementById('reset-btn').style.display = 'none';
+  document.getElementById('capture-progress').style.display = 'none';
+  clearResult();
+  setStatus('Scanning…', '#ffaa00');
+});
+
+// ═══════════════════════════════════════════════════════
 // CAMERA
 // ═══════════════════════════════════════════════════════
 async function startCamera() {
@@ -924,9 +962,71 @@ function loop(ts) {
   setTime('tt',t3-t0);
 
   if (warped) {
-    cCtx.putImageData(warped,0,0);
-    showResult(corners, tl, tr, br, bl);
+    // ── If already locked on a final result, ignore further frames ──
+    if (phase === 'done') return;
+
+    // ── Start capturing on first good detection ──
+    if (phase === 'scanning') {
+      phase = 'capturing';
+      capturedFrames = [];
+      document.getElementById('capture-progress').style.display = 'flex';
+      document.getElementById('empty').style.display = 'none';
+    }
+
+    if (phase === 'capturing') {
+      capturedFrames.push(warped);
+      captureMeta = { tl, tr, br, bl };
+      const n = capturedFrames.length;
+      const pct = Math.min(100, Math.round(n/CAPTURE_TARGET*100));
+      document.getElementById('capture-bar-fill').style.width = pct+'%';
+      document.getElementById('capture-progress-text').textContent =
+        'Capturing '+n+'/'+CAPTURE_TARGET+'…';
+
+      // Show a live preview of the latest frame while capturing
+      cCtx.putImageData(warped,0,0);
+
+      if (n >= CAPTURE_TARGET) {
+        finalizeCapture();
+      }
+    }
   }
+}
+
+// ═══════════════════════════════════════════════════════
+// FINALIZE — average all captured frames pixel-wise to reduce
+// motion blur / noise, then lock the result and stop scanning.
+// ═══════════════════════════════════════════════════════
+function finalizeCapture() {
+  const n = capturedFrames.length;
+  const sz = OUT_SZ;
+  const sum = new Float32Array(sz*sz*3);
+  for (const frame of capturedFrames) {
+    const d = frame.data;
+    for (let i=0, p=0; i<d.length; i+=4, p+=3) {
+      sum[p]   += d[i];
+      sum[p+1] += d[i+1];
+      sum[p+2] += d[i+2];
+    }
+  }
+  const avg = new ImageData(sz, sz);
+  const ad = avg.data;
+  for (let i=0, p=0; i<ad.length; i+=4, p+=3) {
+    ad[i]   = sum[p]/n;
+    ad[i+1] = sum[p+1]/n;
+    ad[i+2] = sum[p+2]/n;
+    ad[i+3] = 255;
+  }
+  cCtx.putImageData(avg, 0, 0);
+
+  document.getElementById('capture-progress').style.display = 'none';
+  document.getElementById('reset-btn').style.display = 'block';
+
+  phase = 'done';
+  if (captureMeta) {
+    showResult(captureMeta.tl, captureMeta.tr, captureMeta.br, captureMeta.bl);
+  }
+  setStatus('Locked ✓', '#00e5a0');
+  dbg('Captured '+n+' frames, averaged — locked. Tap "Scan again" to rescan.');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -952,7 +1052,7 @@ function drawQuad(ctx, pts, sx, sy) {
   ctx.restore();
 }
 
-function showResult(corners, tl, tr, br, bl) {
+function showResult(tl, tr, br, bl) {
   document.getElementById('empty').style.display='none';
   cropC.style.display='block';
   document.getElementById('info').style.display='flex';
