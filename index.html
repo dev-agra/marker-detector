@@ -3,1073 +3,1229 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>DataMatrix Detector</title>
+<title>DataMatrix Localiser</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   :root {
-    --bg: #0a0a0a; --surface: #141414; --border: #222;
-    --accent: #00e5a0; --text: #f0f0f0; --muted: #555;
+    --bg:#0a0a0a; --surface:#141414; --surface2:#1c1c1c; --border:#262626;
+    --accent:#00e5a0; --blue:#3ea6ff; --warn:#ffaa00; --bad:#ff4444;
+    --text:#f0f0f0; --muted:#6b6b6b;
   }
-  html, body { background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    height: 100%; overflow: hidden; }
-  #app { display: flex; flex-direction: column; height: 100dvh; }
+  html, body { background:var(--bg); color:var(--text); height:100%; overflow:hidden;
+    font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #app { display:flex; flex-direction:column; height:100dvh; }
 
-  #header { display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; background: var(--surface);
-    border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  #header h1 { font-size: 15px; font-weight: 600; }
-  #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .2s; }
+  header { display:flex; align-items:center; gap:10px; padding:11px 14px;
+    background:var(--surface); border-bottom:1px solid var(--border); flex-shrink:0; }
+  header h1 { font-size:14px; font-weight:600; letter-spacing:-.1px; }
+  header .v { font-size:10px; color:var(--muted); font-weight:400; }
+  #stxt { margin-left:auto; font-size:12px; color:var(--muted); }
+  #dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
 
-  #cam-wrap { position: relative; flex: 1; overflow: hidden; background: #000; }
-  #video { width: 100%; height: 100%; object-fit: cover; display: block; }
-  #overlay { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+  #cam { position:relative; flex:1 1 auto; min-height:150px; overflow:hidden; background:#000; }
+  video { width:100%; height:100%; object-fit:cover; display:block; }
+  #overlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #guide { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:min(74vw,300px); aspect-ratio:1; pointer-events:none; }
+  .gc { position:absolute; width:22px; height:22px; border:0 solid rgba(255,255,255,.45); }
+  .gc.tl{top:0;left:0;border-top-width:2px;border-left-width:2px}
+  .gc.tr{top:0;right:0;border-top-width:2px;border-right-width:2px}
+  .gc.bl{bottom:0;left:0;border-bottom-width:2px;border-left-width:2px}
+  .gc.br{bottom:0;right:0;border-bottom-width:2px;border-right-width:2px}
 
-  /* Guide box */
-  #guide { position: absolute; top:50%; left:50%;
-    transform: translate(-50%,-50%);
-    width: min(70vw,280px); height: min(70vw,280px); pointer-events:none; }
-  .gc { position:absolute; width:24px; height:24px; border-color:rgba(255,255,255,.5); border-style:solid; }
-  .gc.tl{top:0;left:0;border-width:2px 0 0 2px;border-radius:3px 0 0 0}
-  .gc.tr{top:0;right:0;border-width:2px 2px 0 0;border-radius:0 3px 0 0}
-  .gc.bl{bottom:0;left:0;border-width:0 0 2px 2px;border-radius:0 0 0 3px}
-  .gc.br{bottom:0;right:0;border-width:0 2px 2px 0;border-radius:0 0 3px 0}
+  #panel { background:var(--surface); border-top:1px solid var(--border);
+    flex-shrink:0; max-height:58vh; overflow-y:auto; }
 
-  #panel { background:var(--surface); border-top:1px solid var(--border); flex-shrink:0;
-    max-height:44vh; overflow-y:auto; }
-  #cam-wrap { min-height:120px; }
+  #metrics { display:flex; align-items:center; gap:12px; padding:8px 14px;
+    border-bottom:1px solid var(--border); font:11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+    color:var(--muted); white-space:nowrap; overflow-x:auto; }
+  #metrics b { color:var(--text); font-weight:500; }
+  #metrics .sep { color:var(--border); }
 
-  #timing { display:flex; align-items:center; gap:4px; padding:10px 16px;
-    border-bottom:1px solid var(--border); font-size:12px; min-height:38px; }
-  .tl { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); min-width:48px; }
-  .tv { font-family:monospace; font-size:13px; color:var(--text); min-width:54px; }
-  .tv.green { color:var(--accent); }
-  #fps { margin-left:auto; font-size:11px; font-family:monospace; color:var(--muted); }
+  #msg { padding:9px 14px; font-size:12px; color:var(--muted);
+    border-bottom:1px solid var(--border); min-height:34px; }
 
-  #dbg { padding:5px 16px; font-size:11px; font-family:monospace;
-    color:var(--muted); border-bottom:1px solid var(--border); min-height:26px; }
+  #cap { display:none; align-items:center; gap:10px; padding:10px 14px;
+    border-bottom:1px solid var(--border); }
+  #cap-track { flex:1; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+  #cap-fill { height:100%; width:0; background:var(--accent); transition:width .12s linear; }
+  #cap-txt { font:11px ui-monospace, monospace; color:var(--accent); min-width:96px; text-align:right; }
 
-  #capture-progress { padding:10px 16px; border-bottom:1px solid var(--border);
-    display:flex; align-items:center; gap:10px; }
-  #capture-bar-track { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
-  #capture-bar-fill { height:100%; width:0%; background:var(--accent);
-    border-radius:3px; transition:width .15s ease; }
-  #capture-progress-text { font-size:11px; font-family:monospace; color:var(--accent);
-    white-space:nowrap; min-width:110px; }
+  #body { padding:14px; }
+  #empty { display:flex; flex-direction:column; align-items:center; gap:8px;
+    color:var(--muted); font-size:13px; padding:14px 0; }
+  #empty svg { opacity:.3 }
 
-  #result-area { display:flex; align-items:center; gap:16px; padding:14px 16px; min-height:120px;
-    flex-wrap:wrap; position:relative; }
-  #empty { display:flex; flex-direction:column; align-items:center; gap:6px;
-    color:var(--muted); font-size:13px; width:100%; }
-  #empty-icon { font-size:28px; opacity:.25; }
-  #crop-canvas { width:100px; height:100px; border:1px solid var(--accent);
-    border-radius:6px; image-rendering:pixelated; display:none; box-shadow:0 0 0 3px rgba(0,229,160,0.15); }
-  #info { flex:1; display:flex; flex-direction:column; gap:7px; display:none; min-width:140px; }
-  .ir { display:flex; flex-direction:column; gap:2px; }
-  .il { font-size:10px; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); }
-  .iv { font-size:13px; font-family:monospace; color:var(--text); }
-  .iv.g { color:var(--accent); }
-  #reset-btn { width:100%; margin-top:4px; padding:9px; background:var(--surface);
-    border:1px solid var(--border); border-radius:8px; color:var(--text);
-    font-size:13px; font-family:inherit; cursor:pointer; }
-  #reset-btn:active { background:var(--border); }
+  #result { display:none; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+  #crop { width:132px; height:132px; flex-shrink:0; background:#fff;
+    border:1px solid var(--accent); border-radius:4px; image-rendering:pixelated; }
+  #info { flex:1 1 150px; display:flex; flex-direction:column; gap:8px; }
+  .row { display:flex; flex-direction:column; gap:1px; }
+  .row .k { font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .row .v { font:12px ui-monospace, monospace; color:var(--text); }
+  .row .v.g { color:var(--accent); }
+  #buttons { display:flex; gap:8px; flex-wrap:wrap; width:100%; margin-top:2px; }
+  button { flex:1 1 auto; padding:9px 12px; background:var(--surface2);
+    border:1px solid var(--border); border-radius:7px; color:var(--text);
+    font:13px inherit; cursor:pointer; }
+  button:active { background:var(--border); }
+  button.primary { border-color:var(--accent); color:var(--accent); }
 
-  #proc-c { display:none; }
-
-  #debug-panel { border-top:1px solid var(--border); padding:8px 16px 10px; flex-shrink:0; }
-  #debug-panel-body { display:flex; gap:10px; align-items:flex-start; }
-  #debug-panel-header { display:flex; flex-direction:column; gap:4px; padding-top:2px; }
-  #debug-legend { display:flex; flex-direction:column; gap:4px; }
-  .lg { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text); }
-  .sw { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
-  .sw.solid { background:#00e5a0; }
-  .sw.alt   { background:#3ea6ff; }
-  .sw.bad   { background:#ff4444; }
-  #debug-canvas { width:110px; height:110px; background:#000;
-    border:1px solid var(--border); border-radius:6px; image-rendering:pixelated;
-    display:block; flex-shrink:0; }
+  #debug { border-top:1px solid var(--border); padding:10px 14px 14px;
+    display:flex; gap:12px; align-items:flex-start; }
+  #dbg-canvas { width:120px; height:80px; border:1px solid var(--border);
+    border-radius:4px; background:#000; flex-shrink:0; }
+  #legend { display:flex; flex-direction:column; gap:5px; font-size:11px; }
+  .lg { display:flex; align-items:center; gap:6px; color:var(--text); }
+  .sw { width:9px; height:9px; border-radius:2px; flex-shrink:0; }
+  #dbg-note { font:10px/1.4 ui-monospace, monospace; color:var(--muted); margin-top:4px; }
+  #binz { flex:0 0 auto; font-size:11px; padding:5px 8px; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="header">
-    <h1>DataMatrix Detector <span style="font-size:10px;color:var(--muted);font-weight:400">v18</span></h1>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span id="stxt" style="font-size:12px;color:var(--muted)">Starting…</span>
-      <div id="dot"></div>
-    </div>
-  </div>
+  <header>
+    <h1>DataMatrix Localiser <span class="v">v19</span></h1>
+    <span id="stxt">Starting</span>
+    <span id="dot"></span>
+  </header>
 
-  <div id="cam-wrap">
+  <div id="cam">
     <video id="video" autoplay muted playsinline></video>
     <canvas id="overlay"></canvas>
     <div id="guide">
-      <div class="gc tl"></div><div class="gc tr"></div>
-      <div class="gc bl"></div><div class="gc br"></div>
+      <i class="gc tl"></i><i class="gc tr"></i><i class="gc bl"></i><i class="gc br"></i>
     </div>
   </div>
 
   <div id="panel">
-    <div id="timing">
-      <span class="tl">Threshold</span><span class="tv" id="t0">—</span>
-      <span class="tl">Detect</span><span class="tv" id="t1">—</span>
-      <span class="tl">Warp</span><span class="tv" id="t2">—</span>
-      <span class="tl">Total</span><span class="tv green" id="tt">—</span>
-      <span id="fps">— fps</span>
+    <div id="metrics">
+      <span>grey <b id="t-grey">—</b>ms</span><span class="sep">|</span>
+      <span>detect <b id="t-det">—</b>ms</span><span class="sep">|</span>
+      <span>total <b id="t-tot">—</b>ms</span><span class="sep">|</span>
+      <span id="fps">— fps</span><span class="sep">|</span>
+      <span>src <b id="res">—</b></span><span class="sep">|</span>
+      <span>size <b id="m-dim">—</b></span><span class="sep">|</span>
+      <span>side <b id="m-side">—</b></span><span class="sep">|</span>
+      <span>rot <b id="m-rot">—</b></span><span class="sep">|</span>
+      <span>jitter <b id="m-jit">—</b></span>
     </div>
-    <div id="dbg">Waiting…</div>
-    <div id="capture-progress" style="display:none">
-      <div id="capture-bar-track"><div id="capture-bar-fill"></div></div>
-      <span id="capture-progress-text">Capturing 0/15…</span>
-    </div>
-    <div id="result-area">
-      <div id="empty"><div id="empty-icon">◻</div><span>Point at DataMatrix marker</span></div>
-      <canvas id="crop-canvas" width="200" height="200"></canvas>
-      <div id="info">
-        <div class="ir"><span class="il">Corners</span><span class="iv" id="i-corners">—</span></div>
-        <div class="ir"><span class="il">Size in frame</span><span class="iv" id="i-size">—</span></div>
-        <div class="ir"><span class="il">Orientation</span><span class="iv g" id="i-rot">—</span></div>
-        <div class="ir"><span class="il">Captured</span><span class="iv" id="i-time">—</span></div>
-      </div>
-      <button id="reset-btn" style="display:none">Scan again</button>
-    </div>
-  </div>
 
-  <div id="debug-panel">
-    <div id="debug-panel-body">
-      <canvas id="debug-canvas" width="150" height="150"></canvas>
-      <div id="debug-panel-header">
-        <span id="debug-legend">
-          <span class="lg"><span class="sw solid"></span>solid</span>
-          <span class="lg"><span class="sw alt"></span>alternating</span>
-          <span class="lg"><span class="sw bad"></span>other/empty</span>
-        </span>
-        <span id="debug-zoom-label" style="color:var(--muted);font-size:10px;margin-top:6px">zoomed to candidate region</span>
+    <div id="msg">Point the camera at the marker.</div>
+
+    <div id="cap">
+      <div id="cap-track"><div id="cap-fill"></div></div>
+      <span id="cap-txt">Capturing 0/15</span>
+    </div>
+
+    <div id="body">
+      <div id="empty">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M3 3h6M3 3v6M21 21h-6M21 21v-6M3 21h6M3 21v-6M21 3h-6M21 3v6"/>
+        </svg>
+        <span>No marker captured yet</span>
       </div>
+      <div id="result">
+        <canvas id="crop" width="10" height="10"></canvas>
+        <div id="info">
+          <div class="row"><span class="k">Symbol</span><span class="v g" id="i-dim">—</span></div>
+          <div class="row"><span class="k">Orientation</span><span class="v" id="i-rot">—</span></div>
+          <div class="row"><span class="k">Edges from</span><span class="v" id="i-edges">—</span></div>
+          <div class="row"><span class="k">Output</span><span class="v" id="i-out">—</span></div>
+          <div class="row"><span class="k">Averaging</span><span class="v" id="i-frames">—</span></div>
+          <div class="row"><span class="k">Captured</span><span class="v" id="i-time">—</span></div>
+        </div>
+        <div id="buttons">
+          <button id="again" class="primary">Scan again</button>
+          <button id="save">Save PNG</button>
+          <button id="copy">Copy JSON</button>
+          <button id="toggle-src">Showing: averaged</button>
+          <button id="margin">Crop: tight</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="debug">
+      <canvas id="dbg-canvas" width="240" height="160"></canvas>
+      <div id="legend">
+        <span class="lg"><i class="sw" style="background:#ffc107"></i>L blob outline</span>
+        <span class="lg"><i class="sw" style="background:#00e5a0"></i>symbol quad</span>
+        <span class="lg"><i class="sw" style="background:#3ea6ff"></i>timing modules used</span>
+        <div id="dbg-note">—</div>
+      </div>
+      <button id="binz">Binariser: hybrid</button>
     </div>
   </div>
 </div>
-<canvas id="proc-c"></canvas>
 
 <script>
 'use strict';
-// ═══════════════════════════════════════════════════════
-// ZXing DataMatrix Detector — ported to plain JS
-// Sources: zxing-js/library (Apache License 2.0)
-//   core/common/detector/MathUtils.ts
-//   core/ResultPoint.ts
-//   core/common/detector/WhiteRectangleDetector.ts
-//   core/datamatrix/detector/Detector.ts
-// ═══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// DataMatrix FINDER-PATTERN LOCALISER — v2
+//
+// The L finder pattern is one connected black blob whose convex hull is a
+// pentagon: two long outer arm edges meeting at the L vertex, and one long
+// diagonal spanning the two arm ends. That diagonal is the LONGEST hull
+// edge (~1.41S), and the L vertex is the hull point furthest from it, at
+// distance ~|diagonal|/2. Those two facts localise the marker with no
+// reference to the data region at all, so a blank symbol works exactly as
+// well as a full one — and unlike a min-area rectangle, it stays correct
+// under perspective.
+// ══════════════════════════════════════════════════════════════════
 
-// ── MathUtils ───────────────────────────────────────────
-const MathUtils = {
-  round(d) {
-    if (isNaN(d)) return 0;
-    return (d + (d < 0 ? -0.5 : 0.5)) | 0;
-  },
-  distance(ax, ay, bx, by) {
-    return Math.sqrt((ax-bx)**2 + (ay-by)**2);
+// ── Adaptive (local-mean) threshold via integral image ────────────
+function adaptiveThreshold(grey, w, h, win, C) {
+  const iw = w + 1;
+  const ii = new Float64Array(iw * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    const o = y * w, i1 = (y + 1) * iw, i0 = y * iw;
+    for (let x = 0; x < w; x++) {
+      row += grey[o + x];
+      ii[i1 + x + 1] = ii[i0 + x + 1] + row;
+    }
   }
+  const r = win >> 1;
+  const bin = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const y0 = y - r < 0 ? 0 : y - r, y1 = y + r > h - 1 ? h - 1 : y + r;
+    const a = (y1 + 1) * iw, b = y0 * iw;
+    for (let x = 0; x < w; x++) {
+      const x0 = x - r < 0 ? 0 : x - r, x1 = x + r > w - 1 ? w - 1 : x + r;
+      const n = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum = ii[a + x1 + 1] - ii[b + x1 + 1] - ii[a + x0] + ii[b + x0];
+      bin[y * w + x] = grey[y * w + x] * n < sum - C * n ? 1 : 0;
+    }
+  }
+  return bin;
+}
+
+
+// ── Hybrid binariser (8x8 blocks, ZXing HybridBinarizer approach) ──
+// Local-MEAN thresholding punches holes in strokes thicker than the window.
+// This uses per-block dynamic range instead: a block with no contrast (the
+// inside of a thick bar) inherits its threshold from its neighbours, so
+// thick strokes stay solid while lighting gradients are still tracked.
+function hybridBinarize(grey, w, h) {
+  const B = 8, MIN_DR = 24;
+  const bw = Math.max(1, (w + B - 1) >> 3), bh = Math.max(1, (h + B - 1) >> 3);
+  const bp = new Int32Array(bw * bh);
+  for (let by = 0; by < bh; by++) {
+    const y0 = by * B, y1 = Math.min(h, y0 + B);
+    for (let bx = 0; bx < bw; bx++) {
+      const x0 = bx * B, x1 = Math.min(w, x0 + B);
+      let sum = 0, mn = 255, mx = 0, n = 0;
+      for (let y = y0; y < y1; y++) {
+        const o = y * w;
+        for (let x = x0; x < x1; x++) {
+          const v = grey[o + x];
+          sum += v; n++;
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+        }
+      }
+      let avg = sum / n;
+      if (mx - mn <= MIN_DR) {
+        avg = mn / 2;
+        if (by > 0 && bx > 0) {
+          const nb = (bp[(by - 1) * bw + bx] + 2 * bp[(by - 1) * bw + bx - 1] + bp[by * bw + bx - 1]) / 4;
+          if (mn < nb) avg = nb;
+        }
+      }
+      bp[by * bw + bx] = avg;
+    }
+  }
+  const bin = new Uint8Array(w * h);
+  for (let by = 0; by < bh; by++) {
+    const y0 = by * B, y1 = Math.min(h, y0 + B);
+    const cy = Math.min(Math.max(by, 2), bh - 3);
+    for (let bx = 0; bx < bw; bx++) {
+      const x0 = bx * B, x1 = Math.min(w, x0 + B);
+      const cx = Math.min(Math.max(bx, 2), bw - 3);
+      let sum = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        const o = (cy + dy) * bw;
+        for (let dx = -2; dx <= 2; dx++) sum += bp[o + cx + dx];
+      }
+      const th = sum / 25;
+      for (let y = y0; y < y1; y++) {
+        const o = y * w;
+        for (let x = x0; x < x1; x++) bin[o + x] = grey[o + x] <= th ? 1 : 0;
+      }
+    }
+  }
+  return bin;
+}
+
+// ── Connected components (4-connected, iterative) ─────────────────
+function connectedComponents(bin, w, h, minArea) {
+  const labels = new Int32Array(w * h);
+  const stack = new Int32Array(w * h);
+  const buf = new Int32Array(w * h);
+  const comps = [];
+  let next = 0;
+  for (let s = 0; s < w * h; s++) {
+    if (bin[s] !== 1 || labels[s] !== 0) continue;
+    next++;
+    let sp = 0, n = 0;
+    stack[sp++] = s; labels[s] = next;
+    let minx = w, maxx = -1, miny = h, maxy = -1, sx = 0, sy = 0;
+    while (sp > 0) {
+      const p = stack[--sp];
+      buf[n++] = p;
+      const px = p % w, py = (p - px) / w;
+      if (px < minx) minx = px;
+      if (px > maxx) maxx = px;
+      if (py < miny) miny = py;
+      if (py > maxy) maxy = py;
+      sx += px; sy += py;
+      if (px > 0     && bin[p - 1] && !labels[p - 1]) { labels[p - 1] = next; stack[sp++] = p - 1; }
+      if (px < w - 1 && bin[p + 1] && !labels[p + 1]) { labels[p + 1] = next; stack[sp++] = p + 1; }
+      if (py > 0     && bin[p - w] && !labels[p - w]) { labels[p - w] = next; stack[sp++] = p - w; }
+      if (py < h - 1 && bin[p + w] && !labels[p + w]) { labels[p + w] = next; stack[sp++] = p + w; }
+    }
+    if (n >= minArea) {
+      comps.push({
+        area: n, pixels: buf.slice(0, n), minx, maxx, miny, maxy,
+        cx: sx / n, cy: sy / n,
+        touchesBorder: minx === 0 || miny === 0 || maxx === w - 1 || maxy === h - 1
+      });
+    }
+  }
+  comps.sort((a, b) => b.area - a.area);
+  return comps;
+}
+
+// ── Small geometry library ────────────────────────────────────────
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1]],
+  len: a => Math.hypot(a[0], a[1]),
+  norm: a => { const l = Math.hypot(a[0], a[1]) || 1; return [a[0] / l, a[1] / l]; },
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1],
+  cross: (a, b) => a[0] * b[1] - a[1] * b[0]
 };
 
-// ── ResultPoint ─────────────────────────────────────────
-class ResultPoint {
-  constructor(x, y) { this._x = x; this._y = y; }
-  getX() { return this._x; }
-  getY() { return this._y; }
-  toString() { return `(${this._x.toFixed(1)},${this._y.toFixed(1)})`; }
+function rowExtremes(comp, w) {
+  const H = comp.maxy - comp.miny + 1;
+  const lo = new Int32Array(H).fill(0x7fffffff);
+  const hi = new Int32Array(H).fill(-1);
+  for (let i = 0; i < comp.pixels.length; i++) {
+    const p = comp.pixels[i], x = p % w, y = (p - x) / w - comp.miny;
+    if (x < lo[y]) lo[y] = x;
+    if (x > hi[y]) hi[y] = x;
+  }
+  const pts = [];
+  for (let y = 0; y < H; y++) {
+    if (hi[y] < 0) continue;
+    pts.push([lo[y], y + comp.miny]);
+    if (hi[y] !== lo[y]) pts.push([hi[y], y + comp.miny]);
+  }
+  return pts;
 }
 
-// ── BitMatrix ────────────────────────────────────────────
-// Backed by a plain Uint8Array where 1 = black, 0 = white
-// ZXing's .get(x,y) returns true for black
-class BitMatrix {
-  constructor(width, height, data) {
-    this.width  = width;
-    this.height = height;
-    // data is Uint8Array: 1=black, 0=white
-    this._data  = data || new Uint8Array(width * height);
+function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
   }
-  get(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-    return this._data[y * this.width + x] === 1;
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
   }
-  set(x, y) { this._data[y * this.width + x] = 1; }
-  getWidth()  { return this.width;  }
-  getHeight() { return this.height; }
+  lo.pop(); up.pop();
+  return lo.concat(up);
 }
 
-// ── NotFoundException ────────────────────────────────────
-class NotFoundException extends Error {
-  constructor(msg) { super(msg || 'NotFoundException'); }
+function pointLineDist(p, a, b) {
+  const d = V.sub(b, a), l = V.len(d);
+  if (l < 1e-9) return V.len(V.sub(p, a));
+  return Math.abs(V.cross(d, V.sub(p, a))) / l;
 }
 
-// ── WhiteRectangleDetector ───────────────────────────────
-// Direct port of zxing-js WhiteRectangleDetector.ts
-class WhiteRectangleDetector {
-  constructor(image, initSize, x, y) {
-    this.image  = image;
-    this.height = image.getHeight();
-    this.width  = image.getWidth();
-    if (initSize == null) initSize = 10;
-    if (x == null) x = (image.getWidth()  / 2) | 0;
-    if (y == null) y = (image.getHeight() / 2) | 0;
-    const half = (initSize / 2) | 0;
-    this.leftInit  = x - half;
-    this.rightInit = x + half;
-    this.upInit    = y - half;
-    this.downInit  = y + half;
-    if (this.upInit < 0 || this.leftInit < 0 ||
-        this.downInit >= this.height || this.rightInit >= this.width) {
-      throw new NotFoundException('initSize too large');
-    }
+// Douglas-Peucker on an open polyline
+function simplifyOpen(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  let idx = -1, max = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = pointLineDist(pts[i], pts[0], pts[pts.length - 1]);
+    if (d > max) { max = d; idx = i; }
   }
-
-  detect() {
-    let left = this.leftInit, right = this.rightInit;
-    let up   = this.upInit,   down  = this.downInit;
-    let sizeExceeded = false;
-    let aBlack = true, atLeastOne = false;
-    let onR=false, onB=false, onL=false, onT=false;
-    const { width, height } = this;
-
-    while (aBlack) {
-      aBlack = false;
-
-      let rNotWhite = true;
-      while ((rNotWhite || !onR) && right < width) {
-        rNotWhite = this._containsBlack(up, down, right, false);
-        if (rNotWhite) { right++; aBlack=true; onR=true; }
-        else if (!onR) right++;
-      }
-      if (right >= width) { sizeExceeded=true; break; }
-
-      let bNotWhite = true;
-      while ((bNotWhite || !onB) && down < height) {
-        bNotWhite = this._containsBlack(left, right, down, true);
-        if (bNotWhite) { down++; aBlack=true; onB=true; }
-        else if (!onB) down++;
-      }
-      if (down >= height) { sizeExceeded=true; break; }
-
-      let lNotWhite = true;
-      while ((lNotWhite || !onL) && left >= 0) {
-        lNotWhite = this._containsBlack(up, down, left, false);
-        if (lNotWhite) { left--; aBlack=true; onL=true; }
-        else if (!onL) left--;
-      }
-      if (left < 0) { sizeExceeded=true; break; }
-
-      let tNotWhite = true;
-      while ((tNotWhite || !onT) && up >= 0) {
-        tNotWhite = this._containsBlack(left, right, up, true);
-        if (tNotWhite) { up--; aBlack=true; onT=true; }
-        else if (!onT) up--;
-      }
-      if (up < 0) { sizeExceeded=true; break; }
-
-      if (aBlack) atLeastOne = true;
-    }
-
-    if (!sizeExceeded && atLeastOne) {
-      const maxSize = right - left;
-      let z = null;
-      for (let i=1; z===null && i<maxSize; i++)
-        z = this._blackOnSegment(left, down-i, left+i, down);
-      if (!z) throw new NotFoundException('z');
-
-      let t = null;
-      for (let i=1; t===null && i<maxSize; i++)
-        t = this._blackOnSegment(left, up+i, left+i, up);
-      if (!t) throw new NotFoundException('t');
-
-      let x = null;
-      for (let i=1; x===null && i<maxSize; i++)
-        x = this._blackOnSegment(right, up+i, right-i, up);
-      if (!x) throw new NotFoundException('x');
-
-      let y = null;
-      for (let i=1; y===null && i<maxSize; i++)
-        y = this._blackOnSegment(right, down-i, right-i, down);
-      if (!y) throw new NotFoundException('y');
-
-      return this._centerEdges(y, z, x, t);
-    }
-    throw new NotFoundException('no border');
-  }
-
-  _blackOnSegment(ax, ay, bx, by) {
-    const dist = MathUtils.round(MathUtils.distance(ax, ay, bx, by));
-    const xs = (bx-ax)/dist, ys = (by-ay)/dist;
-    for (let i=0; i<dist; i++) {
-      const x = MathUtils.round(ax + i*xs);
-      const y = MathUtils.round(ay + i*ys);
-      if (this.image.get(x, y)) return new ResultPoint(x, y);
-    }
-    return null;
-  }
-
-  _centerEdges(y, z, x, t) {
-    const C = 1;
-    const yi = y.getX();
-    if (yi < this.width / 2) {
-      return [
-        new ResultPoint(t.getX()-C, t.getY()+C),
-        new ResultPoint(z.getX()+C, z.getY()+C),
-        new ResultPoint(x.getX()-C, x.getY()-C),
-        new ResultPoint(y.getX()+C, y.getY()-C),
-      ];
-    } else {
-      return [
-        new ResultPoint(t.getX()+C, t.getY()+C),
-        new ResultPoint(z.getX()+C, z.getY()-C),
-        new ResultPoint(x.getX()-C, x.getY()+C),
-        new ResultPoint(y.getX()-C, y.getY()-C),
-      ];
-    }
-  }
-
-  _containsBlack(a, b, fixed, horizontal) {
-    if (horizontal) {
-      for (let x=a; x<=b; x++) if (this.image.get(x, fixed)) return true;
-    } else {
-      for (let y=a; y<=b; y++) if (this.image.get(fixed, y)) return true;
-    }
-    return false;
-  }
+  if (max <= eps) return [pts[0], pts[pts.length - 1]];
+  const a = simplifyOpen(pts.slice(0, idx + 1), eps);
+  const b = simplifyOpen(pts.slice(idx), eps);
+  return a.slice(0, -1).concat(b);
 }
 
-// ── DataMatrix Detector ──────────────────────────────────
-// Direct port of zxing-js datamatrix/detector/Detector.ts
-// Only change: detect() returns corners instead of sampling bits
-class DMDetector {
-  constructor(image, initSize, x, y) {
-    this.image = image;
-    this.rectDetector = new WhiteRectangleDetector(image, initSize || 10, x, y);
+// Simplify a closed hull: anchor on the two most distant vertices so the
+// result is rotation-stable, then simplify each half.
+function simplifyHull(hull, eps) {
+  const n = hull.length;
+  if (n < 4) return hull.slice();
+  let ai = 0, bi = 0, best = -1;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const d = V.len(V.sub(hull[i], hull[j]));
+      if (d > best) { best = d; ai = i; bi = j; }
+    }
   }
+  const half1 = [], half2 = [];
+  for (let k = ai; ; k = (k + 1) % n) { half1.push(hull[k]); if (k === bi) break; }
+  for (let k = bi; ; k = (k + 1) % n) { half2.push(hull[k]); if (k === ai) break; }
+  const s1 = simplifyOpen(half1, eps);
+  const s2 = simplifyOpen(half2, eps);
+  return s1.slice(0, -1).concat(s2.slice(0, -1));
+}
 
-  // Returns { topLeft, bottomLeft, bottomRight, topRight } ResultPoints
-  detectCorners() {
-    const cp = this.rectDetector.detect();
-    let pts = this._detectSolid1(cp);
-    pts = this._detectSolid2(pts);
-    pts[3] = this._correctTopRight(pts);
-    if (!pts[3]) throw new NotFoundException('correctTopRight failed');
-    pts = this._shiftToModuleCenter(pts);
+function fitLine(pts) {
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p[0]; my += p[1]; }
+  mx /= pts.length; my /= pts.length;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of pts) {
+    const dx = p[0] - mx, dy = p[1] - my;
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const a = -Math.sin(th), b = Math.cos(th);
+  return { a, b, c: -(a * mx + b * my) };
+}
+
+// Fit with one robust re-weighting pass (drop points beyond `tol`)
+function fitLineRobust(pts, tol) {
+  let l = fitLine(pts);
+  for (let it = 0; it < 2; it++) {
+    const keep = pts.filter(p => Math.abs(l.a * p[0] + l.b * p[1] + l.c) < tol);
+    if (keep.length < 3 || keep.length === pts.length) break;
+    l = fitLine(keep);
+    pts = keep;
+  }
+  return { line: l, used: pts.length };
+}
+
+function lineFromPointDir(p, dir) {
+  const d = V.norm(dir);
+  const a = -d[1], b = d[0];
+  return { a, b, c: -(a * p[0] + b * p[1]) };
+}
+function signedDist(l, p) { return l.a * p[0] + l.b * p[1] + l.c; }
+function offsetAway(l, dist, from) {
+  const s = signedDist(l, from) > 0 ? 1 : -1;
+  return { a: l.a, b: l.b, c: l.c + s * dist };
+}
+function intersect(l1, l2) {
+  const d = l1.a * l2.b - l2.a * l1.b;
+  if (Math.abs(d) < 1e-12) return null;
+  return [(l1.b * l2.c - l2.b * l1.c) / d, (l2.a * l1.c - l1.a * l2.c) / d];
+}
+function projectOnLine(l, p) {
+  const d = signedDist(l, p);
+  return [p[0] - l.a * d, p[1] - l.b * d];
+}
+
+// ── Find the L: two arms from the hull ────────────────────────────
+function findL(comp, w, h, cfg, dbg) {
+  const hull = convexHull(rowExtremes(comp, w));
+  if (hull.length < 4) return { ok: false, reason: 'degenerate blob' };
+  let diameter = 0;
+  for (let i = 0; i < hull.length; i++)
+    for (let j = i + 1; j < hull.length; j++)
+      diameter = Math.max(diameter, V.len(V.sub(hull[i], hull[j])));
+  const poly = simplifyHull(hull, Math.max(1.5, diameter * cfg.simplifyFrac));
+  if (poly.length < 3) return { ok: false, reason: 'blob has no corners' };
+
+  // local mask for membership tests
+  const bw = comp.maxx - comp.minx + 1, bh = comp.maxy - comp.miny + 1;
+  const mask = new Uint8Array(bw * bh);
+  for (let i = 0; i < comp.pixels.length; i++) {
+    const p = comp.pixels[i], x = p % w, y = (p - x) / w;
+    mask[(y - comp.miny) * bw + (x - comp.minx)] = 1;
+  }
+  const inComp = (x, y) => {
+    const ix = (x + 0.5 | 0) - comp.minx, iy = (y + 0.5 | 0) - comp.miny;
+    if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) return false;
+    return mask[iy * bw + ix] === 1;
+  };
+
+  // Longest polygon edge = the diagonal spanning the two arm ends
+  let di = -1, dl = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const l = V.len(V.sub(poly[(i + 1) % poly.length], poly[i]));
+    if (l > dl) { dl = l; di = i; }
+  }
+  const P = poly[di], Q = poly[(di + 1) % poly.length];
+
+  // L vertex = furthest hull point from that diagonal, at ~|PQ|/2
+  let vtx = null, vd = -1;
+  for (const p of poly) {
+    const d = pointLineDist(p, P, Q);
+    if (d > vd) { vd = d; vtx = p; }
+  }
+  const apexRatio = vd / dl;
+  if (apexRatio < cfg.apexMin || apexRatio > cfg.apexMax)
+    return { ok: false, reason: 'not L-shaped (apex ratio ' + apexRatio.toFixed(2) + ')', hull, poly };
+
+  // Arms
+  let a1 = V.sub(P, vtx), a2 = V.sub(Q, vtx);
+  const l1 = V.len(a1), l2 = V.len(a2);
+  const ratio = Math.min(l1, l2) / Math.max(l1, l2);
+  if (ratio < cfg.armRatioMin)
+    return { ok: false, reason: 'arms unequal (' + ratio.toFixed(2) + ')', hull, poly };
+  const cosang = Math.abs(V.dot(V.norm(a1), V.norm(a2)));
+  if (cosang > cfg.armCosMax)
+    return { ok: false, reason: 'arms not perpendicular (cos ' + cosang.toFixed(2) + ')', hull, poly };
+
+  const S = (l1 + l2) / 2;
+  const centroid = [comp.cx, comp.cy];
+
+  // Sub-pixel refit of each arm's OUTER surface, plus stroke thickness
+  function refitArm(endPt) {
+    const seed = lineFromPointDir(vtx, V.sub(endPt, vtx));
+    const dir = V.norm(V.sub(endPt, vtx));
+    let nx = -dir[1], ny = dir[0];
+    // inward normal points toward the blob centroid
+    if ((centroid[0] - vtx[0]) * nx + (centroid[1] - vtx[1]) * ny < 0) { nx = -nx; ny = -ny; }
+    const L = V.len(V.sub(endPt, vtx));
+    const surf = [], depths = [];
+    const N = cfg.armSamples;
+    const search = Math.max(3, S * 0.12);
+    for (let i = 0; i < N; i++) {
+      const t = (i + 0.5) / N;
+      const bx = vtx[0] + dir[0] * L * t, by = vtx[1] + dir[1] * L * t;
+      let d0 = null;
+      for (let d = -search; d <= search; d += 0.25) {
+        if (inComp(bx + nx * d, by + ny * d)) { d0 = d; break; }
+      }
+      if (d0 === null) continue;
+      surf.push([bx + nx * d0, by + ny * d0]);
+      let run = 0;
+      for (let d = d0; d <= d0 + S * 0.6; d += 0.25) {
+        if (!inComp(bx + nx * d, by + ny * d)) break;
+        run += 0.25;
+      }
+      depths.push(run);
+    }
+    if (surf.length < N * 0.6) return null;   // arm surface not continuous -> not a solid arm
+    depths.sort((p, q) => p - q);
     return {
-      topLeft:     pts[0],
-      bottomLeft:  pts[1],
-      bottomRight: pts[2],
-      topRight:    pts[3],
+      line: fitLineRobust(surf, Math.max(1.2, S * 0.02)).line,
+      coverage: surf.length / N,
+      thickness: depths[depths.length >> 1],
+      inwardN: [nx, ny], dir, end: endPt
     };
   }
+  const A = refitArm(P), B = refitArm(Q);
+  if (!A) return { ok: false, reason: 'arm 1 not solid', hull, poly };
+  if (!B) return { ok: false, reason: 'arm 2 not solid', hull, poly };
 
-  static _shiftPoint(pt, to, div) {
-    const x = (to.getX() - pt.getX()) / (div+1);
-    const y = (to.getY() - pt.getY()) / (div+1);
-    return new ResultPoint(pt.getX()+x, pt.getY()+y);
-  }
+  const t = (A.thickness + B.thickness) / 2;
+  if (!(t > 0.8)) return { ok: false, reason: 'stroke too thin', hull, poly };
+  const modulesF = S / t;
+  let dim = Math.round(modulesF);
+  if (dim & 1) dim += (modulesF - dim > 0 ? 1 : -1);
+  if (modulesF < cfg.minDim - 1.5 || modulesF > cfg.maxDim + 4)
+    return { ok: false, reason: 'implausible module count (' + modulesF.toFixed(1) + ')', hull, poly };
 
-  static _moveAway(pt, fx, fy) {
-    let x = pt.getX(), y = pt.getY();
-    if (x < fx) x--; else x++;
-    if (y < fy) y--; else y++;
-    return new ResultPoint(x, y);
-  }
+  // Area check: an L of side S and stroke t covers 2tS - t^2.
+  // Rejects filled squares, blobs, letters, shadows.
+  const expect = 2 * t * S - t * t;
+  const fill = comp.area / expect;
+  if (fill < cfg.fillMin || fill > cfg.fillMax)
+    return { ok: false, reason: 'area mismatch for an L (' + fill.toFixed(2) + 'x)', hull, poly };
 
-  _detectSolid1(cp) {
-    let pA=cp[0], pB=cp[1], pC=cp[3], pD=cp[2];
-    const trAB = this._transitions(pA,pB);
-    const trBC = this._transitions(pB,pC);
-    const trCD = this._transitions(pC,pD);
-    const trDA = this._transitions(pD,pA);
-    let min=trAB, pts=[pD,pA,pB,pC];
-    if (min>trBC) { min=trBC; pts=[pA,pB,pC,pD]; }
-    if (min>trCD) { min=trCD; pts=[pB,pC,pD,pA]; }
-    if (min>trDA) {           pts=[pC,pD,pA,pB]; }
-    return pts;
-  }
-
-  _detectSolid2(pts) {
-    let [pA,pB,pC,pD] = pts;
-    const tr  = this._transitions(pA,pD);
-    const pBs = DMDetector._shiftPoint(pB,pC,(tr+1)*4);
-    const pCs = DMDetector._shiftPoint(pC,pB,(tr+1)*4);
-    const trBA = this._transitions(pBs,pA);
-    const trCD = this._transitions(pCs,pD);
-    return trBA<trCD ? [pA,pB,pC,pD] : [pB,pC,pD,pA];
-  }
-
-  _correctTopRight(pts) {
-    let [pA,pB,pC,pD] = pts;
-    let trTop   = this._transitions(pA,pD);
-    let trRight = this._transitions(pB,pD);
-    const pAs = DMDetector._shiftPoint(pA,pB,(trRight+1)*4);
-    const pCs = DMDetector._shiftPoint(pC,pB,(trTop+1)*4);
-    trTop   = this._transitions(pAs,pD);
-    trRight = this._transitions(pCs,pD);
-    const c1 = new ResultPoint(pD.getX()+(pC.getX()-pB.getX())/(trTop+1),
-                                pD.getY()+(pC.getY()-pB.getY())/(trTop+1));
-    const c2 = new ResultPoint(pD.getX()+(pA.getX()-pB.getX())/(trRight+1),
-                                pD.getY()+(pA.getY()-pB.getY())/(trRight+1));
-    const v1=this._isValid(c1), v2=this._isValid(c2);
-    if (!v1 && !v2) return null;
-    if (!v1) return c2;
-    if (!v2) return c1;
-    const s1 = this._transitions(pAs,c1)+this._transitions(pCs,c1);
-    const s2 = this._transitions(pAs,c2)+this._transitions(pCs,c2);
-    return s1>s2 ? c1 : c2;
-  }
-
-  _shiftToModuleCenter(pts) {
-    let [pA,pB,pC,pD] = pts;
-    let dimH = this._transitions(pA,pD)+1;
-    let dimV = this._transitions(pC,pD)+1;
-    let pAs = DMDetector._shiftPoint(pA,pB,dimV*4);
-    let pCs = DMDetector._shiftPoint(pC,pB,dimH*4);
-    dimH = this._transitions(pAs,pD)+1;
-    dimV = this._transitions(pCs,pD)+1;
-    if (dimH&1) dimH++;
-    if (dimV&1) dimV++;
-    const cx=(pA.getX()+pB.getX()+pC.getX()+pD.getX())/4;
-    const cy=(pA.getY()+pB.getY()+pC.getY()+pD.getY())/4;
-    pA=DMDetector._moveAway(pA,cx,cy);
-    pB=DMDetector._moveAway(pB,cx,cy);
-    pC=DMDetector._moveAway(pC,cx,cy);
-    pD=DMDetector._moveAway(pD,cx,cy);
-    pAs = DMDetector._shiftPoint(DMDetector._shiftPoint(pA,pB,dimV*4),pD,dimH*4);
-    const pBs = DMDetector._shiftPoint(DMDetector._shiftPoint(pB,pA,dimV*4),pC,dimH*4);
-    pCs = DMDetector._shiftPoint(DMDetector._shiftPoint(pC,pD,dimV*4),pB,dimH*4);
-    const pDs = DMDetector._shiftPoint(DMDetector._shiftPoint(pD,pC,dimV*4),pA,dimH*4);
-    return [pAs,pBs,pCs,pDs];
-  }
-
-  _isValid(p) {
-    return p.getX()>=0 && p.getX()<this.image.getWidth() &&
-           p.getY()>0  && p.getY()<this.image.getHeight();
-  }
-
-  // Bresenham transition count — exact ZXing port
-  _transitions(from, to) {
-    let fx=Math.trunc(from.getX()), fy=Math.trunc(from.getY());
-    let tx=Math.trunc(to.getX()),   ty=Math.trunc(to.getY());
-    let steep = Math.abs(ty-fy) > Math.abs(tx-fx);
-    if (steep) { [fx,fy]=[fy,fx]; [tx,ty]=[ty,tx]; }
-    const dx=Math.abs(tx-fx), dy=Math.abs(ty-fy);
-    let error=-dx/2, ystep=fy<ty?1:-1, xstep=fx<tx?1:-1;
-    let transitions=0;
-    let inBlack = this.image.get(steep?fy:fx, steep?fx:fy);
-    for (let x=fx,y=fy; x!==tx; x+=xstep) {
-      const isBlack = this.image.get(steep?y:x, steep?x:y);
-      if (isBlack!==inBlack) { transitions++; inBlack=isBlack; }
-      error+=dy;
-      if (error>0) { if(y===ty) break; y+=ystep; error-=dx; }
-    }
-    return transitions;
-  }
+  const vRef = intersect(A.line, B.line) || vtx;
+  return {
+    ok: true, hull, poly, inComp, centroid,
+    V: vRef,
+    A1: projectOnLine(A.line, A.end),
+    A2: projectOnLine(B.line, B.end),
+    lineA: A.line, lineB: B.line,
+    t, dim, S, fill, apexRatio, armCos: cosang
+  };
 }
 
-// ═══════════════════════════════════════════════════════
-// PERSPECTIVE WARP — inverse homography pixel mapping
-// ═══════════════════════════════════════════════════════
-function perspectiveWarp(srcImageData, srcW, srcH, corners, outSize) {
-  // corners = [tl,tr,br,bl] each {x,y}
-  const [tl,tr,br,bl] = corners;
-  // Build H: src quad -> dst square [0..outSize]
-  // Using DLT
-  const srcPts = [[tl.x,tl.y],[tr.x,tr.y],[br.x,br.y],[bl.x,bl.y]];
-  const dstPts = [[0,0],[outSize,0],[outSize,outSize],[0,outSize]];
-  const A = [];
-  for (let i=0; i<4; i++) {
-    const [sx,sy]=srcPts[i], [dx,dy]=dstPts[i];
-    A.push([-sx,-sy,-1, 0,  0,  0, dx*sx, dx*sy, dx]);
-    A.push([ 0,  0,  0,-sx,-sy,-1, dy*sx, dy*sy, dy]);
-  }
-  const h = _gaussElim(A);
-  if (!h) return null;
-  // H = [h0..h7, 1]
-  const H = [...h, 1];
-
-  // Compute inverse of H
-  const [h0,h1,h2,h3,h4,h5,h6,h7,h8] = H;
-  const det = h0*(h4*h8-h5*h7) - h1*(h3*h8-h5*h6) + h2*(h3*h7-h4*h6);
-  if (Math.abs(det)<1e-10) return null;
-  const inv = [
-    (h4*h8-h5*h7)/det, (h2*h7-h1*h8)/det, (h1*h5-h2*h4)/det,
-    (h5*h6-h3*h8)/det, (h0*h8-h2*h6)/det, (h2*h3-h0*h5)/det,
-    (h3*h7-h4*h6)/det, (h1*h6-h0*h7)/det, (h0*h4-h1*h3)/det,
-  ];
-
-  const sd = srcImageData.data;
-  const dst = new ImageData(outSize, outSize);
-  const dd = dst.data;
-
-  for (let dy=0; dy<outSize; dy++) {
-    for (let dx=0; dx<outSize; dx++) {
-      const w2 = inv[6]*dx + inv[7]*dy + inv[8];
-      const sx = (inv[0]*dx + inv[1]*dy + inv[2]) / w2;
-      const sy = (inv[3]*dx + inv[4]*dy + inv[5]) / w2;
-      const six=Math.round(sx), siy=Math.round(sy);
-      if (six>=0 && six<srcW && siy>=0 && siy<srcH) {
-        const si=(siy*srcW+six)*4, di=(dy*outSize+dx)*4;
-        dd[di]=sd[si]; dd[di+1]=sd[si+1]; dd[di+2]=sd[si+2]; dd[di+3]=255;
-      }
+// ── Timing-pattern edge fit ───────────────────────────────────────
+// The far side opposite an arm passes through that arm's END POINT, which
+// we already know accurately. So the only unknown is its ANGLE: sweep the
+// pencil of lines through that pivot and keep the angle with the most
+// timing modules on it. A one-dimensional Hough transform — immune to a
+// single merged/bridged blob dragging a least-squares fit, and it recovers
+// the true angle under perspective, where the far side is NOT parallel to
+// the opposite arm.
+function timingEdge(L, cands, pivot, alongDir, cfg) {
+  const t = L.t;
+  const base = Math.atan2(alongDir[1], alongDir[0]);
+  const tol = t * 0.30;
+  let best = null;
+  const span = cfg.houghSpanDeg * Math.PI / 180;
+  const step = cfg.houghStepDeg * Math.PI / 180;
+  for (let th = base - span; th <= base + span; th += step) {
+    const dir = [Math.cos(th), Math.sin(th)];
+    const bound = lineFromPointDir(pivot, dir);
+    const mid = offsetAway(bound, -t / 2, L.centroid);   // half a module INWARD
+    let count = 0, resid = 0;
+    for (const c of cands) {
+      const along = V.dot(V.sub(c, pivot), dir);
+      if (along < -t * 0.7 || along > L.S + t * 0.7) continue;
+      const r = Math.abs(signedDist(mid, c));
+      if (r < tol) { count++; resid += r; }
+    }
+    if (!best || count > best.count || (count === best.count && resid < best.resid)) {
+      best = { count, resid, th, mid, bound };
     }
   }
-  return dst;
-}
-
-function _gaussElim(A) {
-  const n=A.length;
-  for (let col=0; col<n; col++) {
-    let maxR=col;
-    for (let r=col+1; r<n; r++)
-      if (Math.abs(A[r][col])>Math.abs(A[maxR][col])) maxR=r;
-    [A[col],A[maxR]]=[A[maxR],A[col]];
-    const piv=A[col][col];
-    if (Math.abs(piv)<1e-10) return null;
-    for (let r=0; r<n; r++) {
-      if (r===col) continue;
-      const f=A[r][col]/piv;
-      for (let c=col; c<=n; c++) A[r][c]-=f*A[col][c];
+  if (!best || best.count < cfg.minTiming) {
+    return { line: null, count: best ? best.count : 0, modules: [] };
+  }
+  // Re-fit on the inliers for sub-pixel angle, keeping the pivot honest
+  const inl = cands.filter(c => {
+    const along = V.dot(V.sub(c, pivot), [Math.cos(best.th), Math.sin(best.th)]);
+    return along >= -t * 0.7 && along <= L.S + t * 0.7 &&
+           Math.abs(signedDist(best.mid, c)) < tol;
+  });
+  let line = best.bound;
+  if (inl.length >= 3) {
+    const f = fitLineRobust(inl, tol);
+    const cos = Math.abs(V.dot(V.norm([f.line.b, -f.line.a]), V.norm(alongDir)));
+    if (cos > Math.cos(span + 0.05)) {
+      // Offset by half a module to go from centroids to the outer boundary --
+      // but use the module pitch measured AT THIS EDGE, not the pitch from the
+      // L arms. Under perspective the far edge's modules are smaller, and using
+      // the near-side t would push the boundary outside the ink.
+      line = offsetAway(f.line, localHalfModule(inl, f.line, t), L.centroid);
     }
-    for (let c=col; c<=n; c++) A[col][c]/=piv;
   }
-  return A.map(r=>r[n]);
+  return { line, count: inl.length, modules: inl };
 }
 
-// ═══════════════════════════════════════════════════════
-// BINARISATION — Otsu global threshold
-// ZXing uses HybridBinarizer (local) but Otsu is robust enough
-// for a well-printed DataMatrix with sufficient contrast
-// ═══════════════════════════════════════════════════════
-function otsuThreshold(grey, w, h) {
-  const hist = new Int32Array(256);
-  for (let i=0; i<grey.length; i++) hist[grey[i]]++;
-  const total = w*h;
-  let sum=0;
-  for (let i=0; i<256; i++) sum+=i*hist[i];
-  let sumB=0, wB=0, max=0, thresh=0;
-  for (let t=0; t<256; t++) {
-    wB+=hist[t]; if(!wB) continue;
-    const wF=total-wB; if(!wF) break;
-    sumB+=t*hist[t];
-    const mB=sumB/wB, mF=(sum-sumB)/wF;
-    const between=wB*wF*(mB-mF)*(mB-mF);
-    if (between>max) { max=between; thresh=t; }
-  }
-  return thresh;
+// Timing modules alternate, so consecutive black centroids are 2 modules
+// apart. Take the tightest consistent gap to get the local pitch; a dropped
+// module shows up as a 4-module gap and must not skew it.
+function localHalfModule(inl, line, fallbackT) {
+  const dir = V.norm([line.b, -line.a]);
+  const proj = inl.map(p => V.dot(p, dir)).sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < proj.length; i++) gaps.push(proj[i] - proj[i - 1]);
+  if (!gaps.length) return fallbackT / 2;
+  const mn = Math.min(...gaps);
+  const tight = gaps.filter(g => g <= mn * 1.5).sort((a, b) => a - b);
+  const pitch = tight[tight.length >> 1] / 2;      // gap of 2 modules -> 1 module
+  if (!(pitch > 0.4 * fallbackT && pitch < 2.2 * fallbackT)) return fallbackT / 2;
+  return pitch / 2;
 }
 
-function toBitMatrix(grey, w, h, thresh) {
-  const data = new Uint8Array(w*h);
-  for (let i=0; i<grey.length; i++) data[i] = grey[i]<=thresh ? 1 : 0;
-  return new BitMatrix(w, h, data);
-}
-
-function toGrey(imageData) {
-  const { data, width, height } = imageData;
-  const out = new Uint8Array(width*height);
-  for (let i=0; i<out.length; i++) {
-    const o=i*4;
-    out[i] = (data[o]*77 + data[o+1]*150 + data[o+2]*29) >> 8;
+// Candidate timing modules: blob area close to ONE module. A blob of two
+// bridged modules is ~2t^2 and must be excluded — its centroid sits half a
+// module off the timing line and would tilt everything.
+function moduleCandidates(comps, L, quadGuess) {
+  const t2 = L.t * L.t;
+  const lo = 0.35 * t2, hi = 1.75 * t2;
+  const pad = L.t * 1.6;
+  const minx = Math.min(...quadGuess.map(p => p[0])) - pad;
+  const maxx = Math.max(...quadGuess.map(p => p[0])) + pad;
+  const miny = Math.min(...quadGuess.map(p => p[1])) - pad;
+  const maxy = Math.max(...quadGuess.map(p => p[1])) + pad;
+  const out = [];
+  for (const c of comps) {
+    if (c.area < lo || c.area > hi) continue;
+    if (c.cx < minx || c.cx > maxx || c.cy < miny || c.cy > maxy) continue;
+    out.push([c.cx, c.cy]);
   }
   return out;
 }
 
-// ═══════════════════════════════════════════════════════
-// ORIENTATION — use L-corner (solid sides = fewer transitions)
-// ═══════════════════════════════════════════════════════
-function detectOrientation(corners) {
-  // DMDetector already finds orientation via solid side detection
-  // topLeft = corner of the L (two solid sides meet there for standard DM)
-  // The corners returned are already canonical: TL, BL, BR, TR
-  return 'L-corner at TL (canonical DataMatrix orientation)';
+// ── Top level ─────────────────────────────────────────────────────
+const DEFAULTS = {
+  binarizer: 'hybrid',
+  win: 25, C: 8,
+  minBlobArea: 8,
+  simplifyFrac: 0.03,
+  apexMin: 0.34, apexMax: 0.72,
+  armRatioMin: 0.72, armCosMax: 0.40,
+  minDim: 8, maxDim: 64,
+  fillMin: 0.72, fillMax: 1.45,
+  armSamples: 40,
+  minTiming: 3,
+  houghSpanDeg: 22, houghStepDeg: 0.4,
+  minSizeFrac: 0.10, maxSizeFrac: 0.98,
+  quadRatioMin: 0.52,
+  maxCandidates: 8
+};
+
+function detectMarker(grey, w, h, opts) {
+  const cfg = Object.assign({}, DEFAULTS, opts || {});
+  const bin = cfg.binarizer === 'mean'
+    ? adaptiveThreshold(grey, w, h, cfg.win | 1, cfg.C)
+    : hybridBinarize(grey, w, h);
+  const comps = connectedComponents(bin, w, h, cfg.minBlobArea);
+  const minSide = Math.min(w, h);
+  const tried = [];
+  let n = 0;
+
+  for (const comp of comps) {
+    const span = Math.max(comp.maxx - comp.minx, comp.maxy - comp.miny);
+    if (span < cfg.minSizeFrac * minSide) break;    // sorted by area: nothing bigger follows
+    if (n++ >= cfg.maxCandidates) break;
+    if (comp.touchesBorder) { tried.push({ comp, reason: 'runs off the frame edge' }); continue; }
+    if (span > cfg.maxSizeFrac * minSide) { tried.push({ comp, reason: 'fills the frame' }); continue; }
+
+    const L = findL(comp, w, h, cfg);
+    if (!L.ok) { tried.push({ comp, reason: L.reason, poly: L.poly }); continue; }
+
+    // Far edges. The side opposite arm A pivots on A2 (the end of arm B).
+    const dirA = V.sub(L.A1, L.V), dirB = V.sub(L.A2, L.V);
+    const guess = [L.V, L.A1, [L.A1[0] + dirB[0], L.A1[1] + dirB[1]], L.A2];
+    const cands = moduleCandidates(comps, L, guess);
+    const tA = timingEdge(L, cands, L.A2, dirA, cfg);   // opposite arm A
+    const tB = timingEdge(L, cands, L.A1, dirB, cfg);   // opposite arm B
+    const farA = tA.line || lineFromPointDir(L.A2, dirA);
+    const farB = tB.line || lineFromPointDir(L.A1, dirB);
+
+    const expTiming = Math.max(1, Math.floor((L.dim / 2 - 1) * 0.4));
+    if (tA.count + tB.count < 4 || tA.count < 1 || tB.count < 1 ||
+        Math.max(tA.count, tB.count) < expTiming) {
+      tried.push({ comp, reason: 'no timing pattern on the far edges (' + tA.count + '+' + tB.count + ')' });
+      continue;
+    }
+
+    const c00 = L.V;
+    const cA = intersect(L.lineA, farB);   // end of arm A
+    const cB = intersect(L.lineB, farA);   // end of arm B
+    const cFF = intersect(farA, farB);
+    if (!cA || !cB || !cFF) { tried.push({ comp, reason: 'edge intersection failed' }); continue; }
+
+    // Canonical order: L on the left and bottom. For a non-mirrored view
+    // the handedness of the two arms fixes this uniquely.
+    let TL = cA, BR = cB;
+    if (V.cross(V.sub(TL, c00), V.sub(BR, c00)) < 0) { const s = TL; TL = BR; BR = s; }
+    const quad = { tl: pt(TL), tr: pt(cFF), br: pt(BR), bl: pt(c00) };
+
+    const sides = [d2(quad.tl, quad.tr), d2(quad.tr, quad.br), d2(quad.br, quad.bl), d2(quad.bl, quad.tl)];
+    const rMin = Math.min(...sides) / Math.max(...sides);
+    if (rMin < cfg.quadRatioMin) {
+      tried.push({ comp, reason: 'final quad too skewed (' + rMin.toFixed(2) + ')' });
+      continue;
+    }
+    const P4 = [quad.tl, quad.tr, quad.br, quad.bl].map(p => [p.x, p.y]);
+    let convex = true, sgn = 0;
+    for (let i = 0; i < 4; i++) {
+      const cz = V.cross(V.sub(P4[(i + 1) % 4], P4[i]), V.sub(P4[(i + 2) % 4], P4[(i + 1) % 4]));
+      if (sgn === 0) sgn = Math.sign(cz);
+      else if (Math.sign(cz) !== sgn) convex = false;
+    }
+    if (!convex) { tried.push({ comp, reason: 'final quad not convex' }); continue; }
+    return {
+      ok: true, bin, comps, quad, dim: L.dim, module: L.t, side: (sides[0] + sides[2]) / 2,
+      fill: L.fill, apexRatio: L.apexRatio, armCos: L.armCos,
+      timing: { a: tA.count, b: tB.count, modulesA: tA.modules, modulesB: tB.modules },
+      refined: !!(tA.line && tB.line),
+      L, tried
+    };
+  }
+  return { ok: false, bin, comps, tried, reason: tried.length ? tried[0].reason : 'nothing marker-sized in frame' };
 }
 
-// ═══════════════════════════════════════════════════════
-// APP STATE
-// ═══════════════════════════════════════════════════════
-const video   = document.getElementById('video');
-const overlay = document.getElementById('overlay');
-const oCtx    = overlay.getContext('2d');
-const procC   = document.getElementById('proc-c');
-const pCtx    = procC.getContext('2d', { willReadFrequently: true });
-const cropC   = document.getElementById('crop-canvas');
-const cCtx    = cropC.getContext('2d');
-const debugC  = document.getElementById('debug-canvas');
-const dCtx    = debugC.getContext('2d');
+function pt(p) { return { x: p[0], y: p[1] }; }
+function d2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
-const PROC_W=480, PROC_H=270, OUT_SZ=200;
-procC.width=PROC_W; procC.height=PROC_H;
+// ── Warp ──────────────────────────────────────────────────────────
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [sx, sy] = src[i], [dx, dy] = dst[i];
+    A.push([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy]); b.push(dx);
+    A.push([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy]); b.push(dy);
+  }
+  for (let col = 0; col < 8; col++) {
+    let p = col;
+    for (let r = col + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[p][col])) p = r;
+    [A[col], A[p]] = [A[p], A[col]]; [b[col], b[p]] = [b[p], b[col]];
+    const d = A[col][col];
+    if (Math.abs(d) < 1e-12) return null;
+    for (let c = col; c < 8; c++) A[col][c] /= d;
+    b[col] /= d;
+    for (let r = 0; r < 8; r++) {
+      if (r === col) continue;
+      const f = A[r][col];
+      if (!f) continue;
+      for (let c = col; c < 8; c++) A[r][c] -= f * A[col][c];
+      b[r] -= f * b[col];
+    }
+  }
+  return [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 1];
+}
 
-let fCount=0, lastFPS=0, lastFPSt=0;
-let missCount=0;
+function warpGrey(grey, w, h, quad, out, margin) {
+  const m = margin || 0;
+  const H = homography(
+    [[0, 0], [out, 0], [out, out], [0, out]],
+    [[quad.tl.x, quad.tl.y], [quad.tr.x, quad.tr.y], [quad.br.x, quad.br.y], [quad.bl.x, quad.bl.y]]
+  );
+  if (!H) return null;
+  const size = out + 2 * m;
+  const o = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x - m + 0.5, py = y - m + 0.5;
+      const wq = H[6] * px + H[7] * py + H[8];
+      const sx = (H[0] * px + H[1] * py + H[2]) / wq;
+      const sy = (H[3] * px + H[4] * py + H[5]) / wq;
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      const fx = sx - x0, fy = sy - y0;
+      const g = (xx, yy) => (xx < 0 || yy < 0 || xx >= w || yy >= h) ? 255 : grey[yy * w + xx];
+      o[y * size + x] =
+        g(x0, y0) * (1 - fx) * (1 - fy) + g(x0 + 1, y0) * fx * (1 - fy) +
+        g(x0, y0 + 1) * (1 - fx) * fy + g(x0 + 1, y0 + 1) * fx * fy;
+    }
+  }
+  return { data: o, size };
+}
 
-// ═══════════════════════════════════════════════════════
-// MULTI-FRAME CAPTURE STATE MACHINE
-// scanning -> capturing (collecting N good frames) -> done (locked result)
-// Once locked, further frames are ignored until reset.
-// ═══════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════
+// APP LAYER
+// ══════════════════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), oCtx = overlay.getContext('2d');
+const procC = document.createElement('canvas');
+const pCtx = procC.getContext('2d', { willReadFrequently: true });
+const fullC = document.createElement('canvas');
+const fCtx = fullC.getContext('2d', { willReadFrequently: true });
+const cropC = $('crop'), cCtx = cropC.getContext('2d');
+const dbgC = $('dbg-canvas'), dCtx = dbgC.getContext('2d', { willReadFrequently: true });
+
+const PROC_LONG = 400;          // detection resolution (long side)
 const CAPTURE_TARGET = 15;
-let phase = 'scanning';      // 'scanning' | 'capturing' | 'done'
-let capturedFrames = [];     // array of ImageData, all same orientation/size
-let captureMeta = null;      // last good corners/orientation info for display
+const STABLE_NEEDED = 3;        // consecutive consistent frames before capturing
+const STABLE_TOL = 0.025;       // corner jitter allowed, as a fraction of side
+const TRACK_TOL = 0.15;         // corner drift allowed during capture
+// Output margin in modules. 0 = tight crop: the output's outer edge IS the
+// symbol's outer edge, nothing but marker. Measured against the real printed
+// marker, the detected boundary lands within 0.013 modules of the true ink
+// edge, so a flush crop needs no dilation fudge.
+const MARGINS = [0, 0.5, 1];
+let marginIdx = 0;
+const QUIET = () => MARGINS[marginIdx];
 
-document.getElementById('reset-btn').addEventListener('click', () => {
-  phase = 'scanning';
-  capturedFrames = [];
-  captureMeta = null;
-  document.getElementById('reset-btn').style.display = 'none';
-  document.getElementById('capture-progress').style.display = 'none';
-  clearResult();
-  setStatus('Scanning…', '#ffaa00');
-});
+let phase = 'scanning';         // scanning | capturing | done
+let stableHist = [];
+let acc = null, accN = 0, accSize = 0, bestSharp = -1, bestFrame = null;
+let lockedMeta = null, missStreak = 0;
+let fCount = 0, fpsT = 0;
+let showAveraged = true;
+let opts = { binarizer: 'hybrid' };
+let DPR = 1;
 
-// ═══════════════════════════════════════════════════════
-// CAMERA
-// ═══════════════════════════════════════════════════════
+// ── friendlier wording for the detector's reject reasons ──────────
+function humanReason(r) {
+  if (!r) return 'Looking for a marker…';
+  if (r.includes('off the frame edge')) return 'Marker runs off the frame — move back';
+  if (r.includes('fills the frame')) return 'Too close — move back';
+  if (r.includes('nothing marker-sized')) return 'No marker in view — fill more of the frame';
+  if (r.includes('not L-shaped')) return 'Found a dark shape, but it is not an L finder pattern';
+  if (r.includes('arms unequal') || r.includes('not perpendicular')) return 'L pattern is distorted — flatten the angle';
+  if (r.includes('area mismatch')) return 'Shape is not a hollow L — wrong target';
+  if (r.includes('timing pattern')) return 'No timing pattern found — move closer or steady the camera';
+  if (r.includes('module count')) return 'Stroke width does not match a DataMatrix';
+  if (r.includes('not solid')) return 'L pattern is broken up — improve the lighting';
+  if (r.includes('skewed') || r.includes('convex')) return 'Angle is too steep — hold the camera flatter';
+  return r;
+}
+
+// ── camera ────────────────────────────────────────────────────────
 async function startCamera() {
-  setStatus('Requesting camera…','#555');
+  setStatus('Requesting camera…', 'var(--muted)');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} }
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+        focusMode: 'continuous'
+      }, audio: false
     });
     video.srcObject = stream;
-    await new Promise(r=>video.addEventListener('loadedmetadata',r,{once:true}));
+    await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }));
     await video.play();
-    setStatus('Scanning…','#ffaa00');
+    const track = stream.getVideoTracks()[0];
+    const cap = track.getCapabilities ? track.getCapabilities() : {};
+    if (cap.focusMode && cap.focusMode.includes('continuous')) {
+      try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+    }
+    $('res').textContent = video.videoWidth + '×' + video.videoHeight;
+    setStatus('Scanning', 'var(--warn)');
     requestAnimationFrame(loop);
-  } catch(e) {
-    setStatus('Camera error: '+e.message,'#ff4444');
+  } catch (e) {
+    setStatus('Camera blocked', 'var(--bad)');
+    say('Camera error: ' + e.message);
   }
 }
 
-// ═══════════════════════════════════════════════════════
-// MAIN LOOP
-// ═══════════════════════════════════════════════════════
+// ── coordinate mapping: proc space -> displayed video (object-fit: cover)
+function procToDisplay() {
+  const cw = overlay.width, ch = overlay.height;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const s = Math.max(cw / vw, ch / vh);
+  const offX = (cw - vw * s) / 2, offY = (ch - vh * s) / 2;
+  const k = vw / procC.width;                 // proc -> video
+  return p => [offX + p.x * k * s, offY + p.y * k * s];
+}
+
+// ── main loop ─────────────────────────────────────────────────────
 function loop(ts) {
   requestAnimationFrame(loop);
-
-  // FPS
   fCount++;
-  if (ts-lastFPSt >= 1000) {
-    lastFPS=fCount; fCount=0; lastFPSt=ts;
-    document.getElementById('fps').textContent=lastFPS+' fps';
+  if (ts - fpsT >= 1000) { $('fps').textContent = fCount + ' fps'; fCount = 0; fpsT = ts; }
+
+  const box = $('cam').getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const bw = Math.round(box.width * dpr), bh2 = Math.round(box.height * dpr);
+  if (overlay.width !== bw || overlay.height !== bh2) {
+    overlay.width = bw; overlay.height = bh2;
+    overlay.style.width = box.width + 'px'; overlay.style.height = box.height + 'px';
+    DPR = dpr;
   }
+  if (video.readyState < 2 || phase === 'done') return;
 
-  const cr = document.getElementById('cam-wrap').getBoundingClientRect();
-  overlay.width=cr.width; overlay.height=cr.height;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const k = PROC_LONG / Math.max(vw, vh);
+  const pw = Math.round(vw * k), ph = Math.round(vh * k);
+  if (procC.width !== pw) { procC.width = pw; procC.height = ph; }
 
-  if (video.readyState < 2) return;
-
-  const vw=video.videoWidth, vh=video.videoHeight;
-  const t0=performance.now();
-
-  // DIAGNOSTIC: check for orientation mismatch between raw sensor frame
-  // and what's actually displayed. If videoW/H aspect ratio doesn't match
-  // the displayed cam-wrap aspect ratio, the raw frame data we process is
-  // rotated relative to what you see on screen — this breaks cropping.
-  const videoAspect = vw / vh;
-  const displayAspect = cr.width / cr.height;
-  const aspectMismatch = Math.abs(videoAspect - displayAspect) > 0.3 &&
-                          Math.abs(videoAspect - (1/displayAspect)) < 0.3;
-
-  // ── 1. Downsample to PROC size ──
-  const sc=Math.min(PROC_W/vw, PROC_H/vh);
-  const sw=Math.round(vw*sc), sh=Math.round(vh*sc);
-  pCtx.drawImage(video, 0, 0, sw, sh);
-  const frame = pCtx.getImageData(0, 0, sw, sh);
-
-  // ── 2. Greyscale + Otsu threshold → BitMatrix ──
-  const grey   = toGrey(frame);
-  const thresh = otsuThreshold(grey, sw, sh);
-  const bitmat = toBitMatrix(grey, sw, sh, thresh);
-
-  // Ensure a white quiet zone at frame edges so WRD terminates correctly
-  // (clears 8px border of the bitmatrix to white = 0)
-  const QZ = 8;
-  for (let y=0; y<sh; y++) {
-    for (let x=0; x<sw; x++) {
-      if (x<QZ || x>=sw-QZ || y<QZ || y>=sh-QZ) {
-        bitmat._data[y*sw+x] = 0; // force white
-      }
-    }
+  const t0 = performance.now();
+  // Draw the full-res frame ONCE, then downscale for detection. Detection
+  // and the eventual crop must come from the same video frame, or hand
+  // motion between them shows up as a misaligned crop.
+  if (fullC.width !== vw) { fullC.width = vw; fullC.height = vh; }
+  fCtx.drawImage(video, 0, 0);
+  pCtx.drawImage(fullC, 0, 0, pw, ph);
+  const img = pCtx.getImageData(0, 0, pw, ph);
+  const grey = new Uint8Array(pw * ph);
+  for (let i = 0, o = 0; i < grey.length; i++, o += 4) {
+    grey[i] = (img.data[o] * 77 + img.data[o + 1] * 150 + img.data[o + 2] * 29) >> 8;
   }
-  const t1=performance.now();
-  setTime('t0', t1-t0);
-
-  // ── 3. DETECTION — ZXing transition-counting is PRIMARY ──
-  // Production markers are isolated on packaging with clear space around
-  // them (not packed against neighbors like earlier test sheets), so the
-  // flood-fill/dilation scaffolding from earlier versions was solving a
-  // problem that doesn't exist in production and is removed entirely.
-  //
-  // ZXing's WhiteRectangleDetector + solid/alternating transition counting
-  // is rotation-invariant BY MEASUREMENT: it walks each of the 4 sides of
-  // a candidate quad and counts black/white transitions. Whichever 2
-  // ADJACENT sides have the fewest transitions are called "solid" (your
-  // thick border), the other 2 are "alternating" (your dotted timing
-  // strip) — this is measured fresh every frame, regardless of how the
-  // marker is physically rotated in front of the camera.
-  const guideCx = sw >> 1;
-  const guideCy = sh >> 1;
-  // initSize must be large enough that the starting search cross-section
-  // can't land entirely inside a gap between timing-strip dots (verified
-  // empirically earlier: fixed 10px fails, 15%+ of frame dimension works
-  // reliably across both full-scale and tiny/far-away marker sizes).
-  const initSize = Math.max(24, Math.round(Math.min(sw, sh) * 0.15));
-
-  let tl, tr, br, bl;
-  try {
-    const detector = new DMDetector(bitmat, initSize, guideCx, guideCy);
-    const result = detector.detectCorners();
-    tl = { x: result.topLeft.getX(),     y: result.topLeft.getY()     };
-    tr = { x: result.topRight.getX(),    y: result.topRight.getY()    };
-    br = { x: result.bottomRight.getX(), y: result.bottomRight.getY() };
-    bl = { x: result.bottomLeft.getX(),  y: result.bottomLeft.getY()  };
-  } catch(e) {
-    drawDebugPanel(bitmat, sw, sh, null, null, null, false);
-    dbg('No marker found — ' + e.message);
-    missCount++;
-    if (missCount>5) clearResult();
-    setTime('t1', performance.now()-t1);
-    return;
-  }
+  const t1 = performance.now();
+  const res = detectMarker(grey, pw, ph, opts);
   const t2 = performance.now();
+  setT('t-grey', t1 - t0); setT('t-det', t2 - t1); setT('t-tot', t2 - t0);
 
-  // ── Sanity checks on the found quad ──
-  const qW = MathUtils.distance(tl.x,tl.y,tr.x,tr.y);
-  const qH = MathUtils.distance(tl.x,tl.y,bl.x,bl.y);
-  const bboxForDebug = {
-    left:   Math.min(tl.x,tr.x,br.x,bl.x),
-    right:  Math.max(tl.x,tr.x,br.x,bl.x),
-    top:    Math.min(tl.y,tr.y,br.y,bl.y),
-    bottom: Math.max(tl.y,tr.y,br.y,bl.y),
-  };
+  drawDebug(res, pw, ph);
 
-  if (qW < sw*0.08 || qW > sw*0.95 || qH < sh*0.08 || qH > sh*0.95) {
-    drawDebugPanel(bitmat, sw, sh, bboxForDebug, null, null, false);
-    dbg('Rejected — size out of range ('+qW.toFixed(0)+'x'+qH.toFixed(0)+')');
-    missCount++;
-    if (missCount>5) clearResult();
-    setTime('t1', performance.now()-t1);
-    return;
-  }
-  const aspect = qW/qH;
-  if (aspect < 0.7 || aspect > 1.43) {
-    drawDebugPanel(bitmat, sw, sh, bboxForDebug, null, null, false);
-    dbg('Rejected — not square (aspect='+aspect.toFixed(2)+')');
-    missCount++;
-    if (missCount>5) clearResult();
-    setTime('t1', performance.now()-t1);
-    return;
-  }
-
-  // ── Structural signature check as a CONFIDENCE GATE on ZXing's own
-  // corners (not a separate detection method) — confirms the found quad
-  // genuinely has 2 solid + 2 alternating sides before we trust it. ──
-  function analyzeEdgeLine(x1,y1,x2,y2) {
-    const steps = Math.max(Math.abs(x2-x1), Math.abs(y2-y1));
-    const segs = []; let inBlack=false, runStart=0;
-    for (let i=0;i<=steps;i++) {
-      const x=Math.round(x1+(x2-x1)*i/steps), y=Math.round(y1+(y2-y1)*i/steps);
-      const black=bitmat.get(x,y);
-      if (black && !inBlack) { runStart=i; inBlack=true; }
-      if (!black && inBlack) { segs.push(i-runStart); inBlack=false; }
+  if (!res.ok) {
+    missStreak++;
+    say(humanReason(res.reason));
+    if (missStreak > 6) {
+      stableHist = [];
+      oCtx.clearRect(0, 0, overlay.width, overlay.height);
+      if (phase === 'capturing') abortCapture();
     }
-    if (inBlack) segs.push(steps-runStart);
-    return segs;
-  }
-  function classifyEdgeSegs(segs, edgeLen) {
-    if (segs.length===0) return 'empty';
-    const cov = segs.reduce((a,b)=>a+b,0)/edgeLen;
-    if (segs.length<=2 && cov>0.80) return 'solid';
-    if (segs.length>=3 && cov>0.25 && cov<0.85) return 'alternating';
-    return 'other';
-  }
-
-  const sigInset = Math.max(3, Math.round(Math.min(qW,qH) * 0.07));
-  const il=bboxForDebug.left+sigInset, ir=bboxForDebug.right-sigInset;
-  const it=bboxForDebug.top+sigInset,  ib=bboxForDebug.bottom-sigInset;
-  let isMarkerLike = false, cTop='other', cBottom='other', cLeft='other', cRight='other';
-  if (ir>il && ib>it) {
-    const hLen=ir-il, vLen=ib-it;
-    cTop    = classifyEdgeSegs(analyzeEdgeLine(il,it,ir,it), hLen);
-    cBottom = classifyEdgeSegs(analyzeEdgeLine(il,ib,ir,ib), hLen);
-    cLeft   = classifyEdgeSegs(analyzeEdgeLine(il,it,il,ib), vLen);
-    cRight  = classifyEdgeSegs(analyzeEdgeLine(ir,it,ir,ib), vLen);
-    const classes = [cTop,cBottom,cLeft,cRight];
-    const solidCount = classes.filter(c=>c==='solid').length;
-    const altCount = classes.filter(c=>c==='alternating').length;
-    const emptyCount = classes.filter(c=>c==='empty').length;
-    isMarkerLike = emptyCount===0 && ((solidCount>=2 && altCount>=1) || solidCount>=3);
-  }
-
-  drawDebugPanel(bitmat, sw, sh, bboxForDebug,
-                 {top:cTop,bottom:cBottom,left:cLeft,right:cRight},
-                 {il,it,ir,ib}, isMarkerLike);
-
-  if (!isMarkerLike) {
-    dbg('Rejected — no border signature (top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight+')');
-    missCount++;
-    if (missCount>5) clearResult();
-    setTime('t1', performance.now()-t1);
     return;
   }
+  missStreak = 0;
 
-  missCount=0;
-  setTime('t1', t2-t1);
-  dbg('Detected — size='+qW.toFixed(0)+'x'+qH.toFixed(0)+
-      ' top='+cTop+' bottom='+cBottom+' left='+cLeft+' right='+cRight);
+  const map = procToDisplay();
+  drawOverlay(res, map);
+  say('Marker locked · ' + res.dim + '×' + res.dim + ' · module ' +
+      res.module.toFixed(1) + 'px · ' + (res.refined ? 'timing-refined' : 'estimated edges'));
+  $('m-dim').textContent = res.dim + '×' + res.dim;
+  $('m-side').textContent = Math.round(res.side) + 'px @proc';
+  $('m-rot').textContent = rotationOf(res.quad).toFixed(1) + '°';
 
-  // Draw overlay — scale from downsampled (sw,sh) coords to display coords
-  const dsx=cr.width/sw, dsy=cr.height/sh;
-  drawQuad(oCtx,[tl,tr,br,bl],dsx,dsy);
-
-  // ── 4. Perspective warp — reuse the SAME frame ImageData used for detection ──
-  // No second capture. Corners are already in (sw,sh) space matching `frame`.
-  const warped = perspectiveWarp(frame, sw, sh, [tl,tr,br,bl], OUT_SZ);
-  const t3=performance.now();
-  setTime('t2',t3-t2);
-  setTime('tt',t3-t0);
-
-  if (warped) {
-    // ── If already locked on a final result, ignore further frames ──
-    if (phase === 'done') return;
-
-    // ── Start capturing on first good detection ──
-    if (phase === 'scanning') {
-      phase = 'capturing';
-      capturedFrames = [];
-      document.getElementById('capture-progress').style.display = 'flex';
-      document.getElementById('empty').style.display = 'none';
+  // ── stability gate: a single lucky frame must not start a capture ──
+  stableHist.push(res.quad);
+  if (stableHist.length > STABLE_NEEDED) stableHist.shift();
+  const jit = jitter(stableHist);
+  $('m-jit').textContent = isFinite(jit) ? (jit * 100).toFixed(2) + '%' : '—';
+  if (phase === 'scanning') {
+    if (stableHist.length < STABLE_NEEDED || jit > STABLE_TOL) {
+      setStatus('Steadying', 'var(--warn)');
+      return;
     }
+    phase = 'capturing';
+    acc = null; accN = 0; bestSharp = -1; bestFrame = null;
+    lockedMeta = res;
+    $('cap').style.display = 'flex';
+    setStatus('Capturing', 'var(--accent)');
+  }
 
-    if (phase === 'capturing') {
-      capturedFrames.push(warped);
-      captureMeta = { tl, tr, br, bl };
-      const n = capturedFrames.length;
-      const pct = Math.min(100, Math.round(n/CAPTURE_TARGET*100));
-      document.getElementById('capture-bar-fill').style.width = pct+'%';
-      document.getElementById('capture-progress-text').textContent =
-        'Capturing '+n+'/'+CAPTURE_TARGET+'…';
+  if (phase === 'capturing') {
+    if (drift(res.quad, lockedMeta.quad) > TRACK_TOL) { abortCapture(); return; }
+    grabFullRes(res, vw, vh, pw);
+    const pct = Math.round(accN / CAPTURE_TARGET * 100);
+    $('cap-fill').style.width = pct + '%';
+    $('cap-txt').textContent = 'Capturing ' + accN + '/' + CAPTURE_TARGET;
+    if (accN >= CAPTURE_TARGET) finalize();
+  }
+}
 
-      // Show a live preview of the latest frame while capturing
-      cCtx.putImageData(warped,0,0);
+function abortCapture() {
+  phase = 'scanning';
+  acc = null; accN = 0;
+  $('cap').style.display = 'none';
+  setStatus('Scanning', 'var(--warn)');
+}
 
-      if (n >= CAPTURE_TARGET) {
-        finalizeCapture();
+// ── pull the crop from the FULL-RESOLUTION frame ──────────────────
+// Detection runs at 400px for speed; the deliverable must not. Only the
+// marker's bounding box is read back, so this stays cheap at 1080p.
+function grabFullRes(res, vw, vh, pw) {
+  const k = vw / pw;
+  const q = {}, keys = ['tl', 'tr', 'br', 'bl'];
+  for (const key of keys) q[key] = { x: res.quad[key].x * k, y: res.quad[key].y * k };
+  const pad = res.module * k * (QUIET() + 2);   // source read margin, for bilinear sampling
+  const x0 = Math.max(0, Math.floor(Math.min(...keys.map(a => q[a].x)) - pad));
+  const y0 = Math.max(0, Math.floor(Math.min(...keys.map(a => q[a].y)) - pad));
+  const x1 = Math.min(vw, Math.ceil(Math.max(...keys.map(a => q[a].x)) + pad));
+  const y1 = Math.min(vh, Math.ceil(Math.max(...keys.map(a => q[a].y)) + pad));
+  const rw = x1 - x0, rh = y1 - y0;
+  if (rw < 8 || rh < 8) return;
+
+  const src = fCtx.getImageData(x0, y0, rw, rh);
+
+  const local = {};
+  for (const key of keys) local[key] = { x: q[key].x - x0, y: q[key].y - y0 };
+
+  const px = Math.max(6, Math.round(280 / res.dim));
+  const out = res.dim * px, m = Math.round(QUIET() * px);
+  const size = out + 2 * m;
+  const H = homography(
+    [[0, 0], [out, 0], [out, out], [0, out]],
+    [[local.tl.x, local.tl.y], [local.tr.x, local.tr.y], [local.br.x, local.br.y], [local.bl.x, local.bl.y]]
+  );
+  if (!H) return;
+
+  if (!acc || accSize !== size) { acc = new Float32Array(size * size * 3); accSize = size; accN = 0; }
+  const sd = src.data;
+  const frame = new Float32Array(size * size * 3);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const ux = x - m + 0.5, uy = y - m + 0.5;
+      const wq = H[6] * ux + H[7] * uy + H[8];
+      const sx = (H[0] * ux + H[1] * uy + H[2]) / wq;
+      const sy = (H[3] * ux + H[4] * uy + H[5]) / wq;
+      const xi = Math.floor(sx), yi = Math.floor(sy);
+      const fx = sx - xi, fy = sy - yi;
+      const o = (y * size + x) * 3;
+      for (let ch = 0; ch < 3; ch++) {
+        const g = (xx, yy) => (xx < 0 || yy < 0 || xx >= rw || yy >= rh) ? 255 : sd[(yy * rw + xx) * 4 + ch];
+        frame[o + ch] =
+          g(xi, yi) * (1 - fx) * (1 - fy) + g(xi + 1, yi) * fx * (1 - fy) +
+          g(xi, yi + 1) * (1 - fx) * fy + g(xi + 1, yi + 1) * fx * fy;
       }
     }
   }
+  for (let i = 0; i < frame.length; i++) acc[i] += frame[i];
+  accN++;
+
+  // keep the single sharpest frame too — averaging kills noise, but if the
+  // hand drifted at all, one crisp frame can beat the mean
+  const sh = sharpness(frame, size);
+  if (sh > bestSharp) { bestSharp = sh; bestFrame = frame; }
+  lockedMeta = res;
 }
 
-// ═══════════════════════════════════════════════════════
-// FINALIZE — average all captured frames pixel-wise to reduce
-// motion blur / noise, then lock the result and stop scanning.
-// ═══════════════════════════════════════════════════════
-function finalizeCapture() {
-  const n = capturedFrames.length;
-  const sz = OUT_SZ;
-  const sum = new Float32Array(sz*sz*3);
-  for (const frame of capturedFrames) {
-    const d = frame.data;
-    for (let i=0, p=0; i<d.length; i+=4, p+=3) {
-      sum[p]   += d[i];
-      sum[p+1] += d[i+1];
-      sum[p+2] += d[i+2];
+function sharpness(rgb, size) {
+  let s = 0;
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const i = (y * size + x) * 3;
+      const c = rgb[i], u = rgb[i - size * 3], d = rgb[i + size * 3], l = rgb[i - 3], r = rgb[i + 3];
+      const lap = 4 * c - u - d - l - r;
+      s += lap * lap;
     }
   }
-  const avg = new ImageData(sz, sz);
-  const ad = avg.data;
-  for (let i=0, p=0; i<ad.length; i+=4, p+=3) {
-    ad[i]   = sum[p]/n;
-    ad[i+1] = sum[p+1]/n;
-    ad[i+2] = sum[p+2]/n;
-    ad[i+3] = 255;
-  }
-  cCtx.putImageData(avg, 0, 0);
-
-  document.getElementById('capture-progress').style.display = 'none';
-  document.getElementById('reset-btn').style.display = 'block';
-
-  phase = 'done';
-  if (captureMeta) {
-    showResult(captureMeta.tl, captureMeta.tr, captureMeta.br, captureMeta.bl);
-  }
-  setStatus('Locked ✓', '#00e5a0');
-  dbg('Captured '+n+' frames, averaged — locked. Tap "Scan again" to rescan.');
+  return s / (size * size);
 }
 
-// ═══════════════════════════════════════════════════════
-// UI HELPERS
-// ═══════════════════════════════════════════════════════
-function drawQuad(ctx, pts, sx, sy) {
-  ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
-  const scaled = pts.map(p=>({x:p.x*sx, y:p.y*sy}));
-  const t=(Date.now()%800)/800;
-  ctx.save();
-  ctx.setLineDash([8,4]);
-  ctx.lineDashOffset=-t*24;
-  ctx.strokeStyle='#00e5a0';
-  ctx.lineWidth=2.5;
+function finalize() {
+  phase = 'done';
+  $('cap').style.display = 'none';
+  render();
+  $('empty').style.display = 'none';
+  $('result').style.display = 'flex';
+  const q = lockedMeta.quad;
+  $('i-dim').textContent = lockedMeta.dim + ' × ' + lockedMeta.dim + ' modules';
+  $('i-rot').textContent = rotationOf(q).toFixed(1) + '° · L at bottom-left';
+  $('i-frames').textContent = accN + ' frames averaged';
+  $('i-edges').textContent = lockedMeta.refined
+    ? 'timing pattern (' + lockedMeta.timing.a + '+' + lockedMeta.timing.b + ' modules)'
+    : 'estimated (no timing found)';
+  $('i-time').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  setStatus('Locked', 'var(--accent)');
+  say('Captured and aligned. Tap Scan again to redo.');
+}
+
+function render() {
+  const src = showAveraged ? acc : bestFrame;
+  const n = showAveraged ? accN : 1;
+  if (!src) return;
+  const size = accSize;
+  cropC.width = size; cropC.height = size;
+  const out = cCtx.createImageData(size, size);
+  for (let i = 0, o = 0; i < size * size; i++, o += 3) {
+    out.data[i * 4] = src[o] / n;
+    out.data[i * 4 + 1] = src[o + 1] / n;
+    out.data[i * 4 + 2] = src[o + 2] / n;
+    out.data[i * 4 + 3] = 255;
+  }
+  cCtx.putImageData(out, 0, 0);
+  $('i-out').textContent = size + '×' + size + 'px';
+}
+
+// ── overlays ──────────────────────────────────────────────────────
+function drawOverlay(res, map) {
+  const ctx = oCtx;
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const P = ['tl', 'tr', 'br', 'bl'].map(k => map(res.quad[k]));
+  ctx.lineWidth = 2.5 * DPR;
+  ctx.strokeStyle = 'rgba(0,229,160,.95)';
   ctx.beginPath();
-  ctx.moveTo(scaled[0].x, scaled[0].y);
-  for(let i=1;i<scaled.length;i++) ctx.lineTo(scaled[i].x,scaled[i].y);
+  ctx.moveTo(P[0][0], P[0][1]);
+  for (let i = 1; i < 4; i++) ctx.lineTo(P[i][0], P[i][1]);
   ctx.closePath();
   ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle='#00e5a0';
-  scaled.forEach(p=>{ ctx.beginPath(); ctx.arc(p.x,p.y,4,0,Math.PI*2); ctx.fill(); });
-  ctx.restore();
-}
-
-function showResult(tl, tr, br, bl) {
-  document.getElementById('empty').style.display='none';
-  cropC.style.display='block';
-  document.getElementById('info').style.display='flex';
-  const sz=Math.round(MathUtils.distance(tl.x,tl.y,tr.x,tr.y));
-  document.getElementById('i-corners').textContent=
-    `TL(${Math.round(tl.x)},${Math.round(tl.y)})`;
-  document.getElementById('i-size').textContent=sz+'px wide';
-  document.getElementById('i-rot').textContent='Canonical (ZXing L-corner)';
-  document.getElementById('i-time').textContent=
-    new Date().toLocaleTimeString('en-GB',{hour12:false});
-  setStatus('Detected','#00e5a0');
-}
-
-function clearResult() {
-  document.getElementById('empty').style.display='flex';
-  cropC.style.display='none';
-  document.getElementById('info').style.display='none';
-  oCtx.clearRect(0,0,overlay.width,overlay.height);
-  setStatus('Scanning…','#ffaa00');
-}
-
-function setStatus(txt,col) {
-  document.getElementById('stxt').textContent=txt;
-  document.getElementById('dot').style.background=col;
-}
-
-function setTime(id, ms) {
-  const el=document.getElementById(id);
-  if (el) el.textContent = ms!=null ? ms.toFixed(1)+'ms' : '—';
-}
-
-function dbg(msg) { document.getElementById('dbg').textContent=msg; }
-function fmt(rp) { return Math.round(rp.getX())+','+Math.round(rp.getY()); }
-
-// ═══════════════════════════════════════════════════════
-// DEBUG VISUALIZATION — shows the actual binarized frame,
-// detected bbox, and the 4 edge classification lines
-// (solid=green, alternating=blue, other/empty=red)
-// ═══════════════════════════════════════════════════════
-function drawDebugPanel(bitmat, w, h, bbox, edgeClasses, inset, accepted) {
-  const cw = debugC.width, ch = debugC.height;
-  dCtx.clearRect(0,0,cw,ch);
-
-  // ZOOM into the candidate region (bbox + generous padding) instead of
-  // showing the whole frame. The crop region is forced SQUARE (using the
-  // larger of width/height, padded equally) so the debug canvas never
-  // shows a letterboxed/distorted rectangle regardless of the bbox's
-  // actual aspect ratio.
-  let cropL, cropT, cropR, cropB;
-  if (bbox && bbox.left>=0) {
-    const bcx = (bbox.left+bbox.right)/2, bcy = (bbox.top+bbox.bottom)/2;
-    const bw = bbox.right-bbox.left, bh = bbox.bottom-bbox.top;
-    const half = Math.round(Math.max(bw,bh) * 0.65); // half-size incl. padding
-    cropL = Math.max(0, bcx - half);
-    cropT = Math.max(0, bcy - half);
-    cropR = Math.min(w, bcx + half);
-    cropB = Math.min(h, bcy + half);
-    // If clamped against frame edge, re-square by pulling the opposite
-    // side in rather than leaving a non-square crop
-    const finalW = cropR-cropL, finalH = cropB-cropT;
-    if (finalW !== finalH) {
-      const side = Math.min(finalW, finalH);
-      cropR = cropL + side;
-      cropB = cropT + side;
-    }
-  } else {
-    // No candidate — zoom to center square region matching the guide box
-    const side = Math.round(Math.min(w,h) * 0.4);
-    const cx = w/2, cy = h/2;
-    cropL = Math.round(cx - side/2); cropR = cropL + side;
-    cropT = Math.round(cy - side/2); cropB = cropT + side;
+  // thicken the two solid L edges so the orientation is readable at a glance
+  ctx.strokeStyle = 'rgba(255,255,255,.95)';
+  ctx.lineWidth = 4 * DPR;
+  ctx.beginPath();
+  ctx.moveTo(P[0][0], P[0][1]); ctx.lineTo(P[3][0], P[3][1]); ctx.lineTo(P[2][0], P[2][1]);
+  ctx.stroke();
+  ctx.fillStyle = '#00e5a0';
+  P.forEach((p, i) => {
+    ctx.beginPath(); ctx.arc(p[0], p[1], (i === 3 ? 6 : 4) * DPR, 0, 7); ctx.fill();
+  });
+  ctx.fillStyle = '#fff';
+  ctx.font = '600 ' + (11 * DPR) + 'px ui-monospace, monospace';
+  ctx.fillText('L', P[3][0] + 9 * DPR, P[3][1] - 7 * DPR);
+  // timing modules actually used by the fit
+  ctx.fillStyle = 'rgba(62,166,255,.95)';
+  for (const m of [...res.timing.modulesA, ...res.timing.modulesB]) {
+    const p = map({ x: m[0], y: m[1] });
+    ctx.beginPath(); ctx.arc(p[0], p[1], 2.5 * DPR, 0, 7); ctx.fill();
   }
-  const cropW = cropR-cropL, cropH = cropB-cropT;
-  const scale = Math.min(cw/cropW, ch/cropH);
-  const offX = (cw - cropW*scale)/2, offY = (ch - cropH*scale)/2;
+}
 
+function drawDebug(res, pw, ph) {
+  const cw = dbgC.width, ch = dbgC.height;
+  const s = Math.min(cw / pw, ch / ph);
+  const ox = (cw - pw * s) / 2, oy = (ch - ph * s) / 2;
   const img = dCtx.createImageData(cw, ch);
-  const data = img.data;
-  for (let cy=0; cy<ch; cy++) {
-    for (let cx=0; cx<cw; cx++) {
-      const srcX = cropL + Math.floor((cx-offX)/scale);
-      const srcY = cropT + Math.floor((cy-offY)/scale);
-      const di = (cy*cw+cx)*4;
-      if (srcX>=cropL && srcX<cropR && srcY>=cropT && srcY<cropB && srcX>=0 && srcX<w && srcY>=0 && srcY<h) {
-        const isBlack = bitmat.get(srcX, srcY);
-        const v = isBlack ? 20 : 235;
-        data[di]=v; data[di+1]=v; data[di+2]=v; data[di+3]=255;
-      } else {
-        data[di]=10; data[di+1]=10; data[di+2]=14; data[di+3]=255;
-      }
+  const d = img.data;
+  for (let y = 0; y < ch; y++) {
+    for (let x = 0; x < cw; x++) {
+      const sx = Math.floor((x - ox) / s), sy = Math.floor((y - oy) / s);
+      const i = (y * cw + x) * 4;
+      let v = 12;
+      if (sx >= 0 && sy >= 0 && sx < pw && sy < ph) v = res.bin[sy * pw + sx] ? 22 : 232;
+      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
     }
   }
   dCtx.putImageData(img, 0, 0);
+  const T = p => [ox + p[0] * s, oy + p[1] * s];
 
-  function toCanvas(x,y) { return [offX+(x-cropL)*scale, offY+(y-cropT)*scale]; }
-
-  if (bbox && bbox.left>=0) {
-    const [x1,y1] = toCanvas(bbox.left, bbox.top);
-    const [x2,y2] = toCanvas(bbox.right, bbox.bottom);
-    dCtx.strokeStyle = accepted ? '#00e5a0' : 'rgba(255,255,255,0.5)';
+  // the L blob's simplified hull — this is what the decision is made on
+  const poly = res.ok ? res.L.poly : (res.tried[0] && res.tried[0].poly);
+  if (poly && poly.length) {
+    dCtx.strokeStyle = res.ok ? 'rgba(255,193,7,.95)' : 'rgba(255,68,68,.9)';
     dCtx.lineWidth = 1.5;
-    dCtx.setLineDash([4,3]);
-    dCtx.strokeRect(x1, y1, x2-x1, y2-y1);
-    dCtx.setLineDash([]);
+    dCtx.beginPath();
+    poly.forEach((p, i) => { const q = T(p); i ? dCtx.lineTo(q[0], q[1]) : dCtx.moveTo(q[0], q[1]); });
+    dCtx.closePath(); dCtx.stroke();
   }
-
-  if (bbox && edgeClasses && inset) {
-    const colorFor = c => c==='solid' ? '#00e5a0' : c==='alternating' ? '#3ea6ff' : '#ff4444';
-    const { il, it, ir, ib } = inset;
-    const lines = [
-      [il,it,ir,it, edgeClasses.top,    'T', (il+ir)/2, it],
-      [il,ib,ir,ib, edgeClasses.bottom, 'B', (il+ir)/2, ib],
-      [il,it,il,ib, edgeClasses.left,   'L', il, (it+ib)/2],
-      [ir,it,ir,ib, edgeClasses.right,  'R', ir, (it+ib)/2],
-    ];
-    dCtx.font = 'bold 11px monospace';
-    dCtx.textAlign = 'center';
-    dCtx.textBaseline = 'middle';
-    for (const [x1,y1,x2,y2,cls,label,lx,ly] of lines) {
-      const [cx1,cy1] = toCanvas(x1,y1);
-      const [cx2,cy2] = toCanvas(x2,y2);
-      const col = colorFor(cls);
-      dCtx.strokeStyle = col;
-      dCtx.lineWidth = 2.5;
-      dCtx.beginPath();
-      dCtx.moveTo(cx1,cy1);
-      dCtx.lineTo(cx2,cy2);
-      dCtx.stroke();
-      // Explicit T/B/L/R label so there's no ambiguity about which
-      // line corresponds to which side of the marker.
-      const [lcx,lcy] = toCanvas(lx,ly);
-      dCtx.fillStyle = '#000';
-      dCtx.fillRect(lcx-8, lcy-8, 16, 16);
-      dCtx.fillStyle = col;
-      dCtx.fillText(label, lcx, lcy);
+  if (res.ok) {
+    const P = ['tl', 'tr', 'br', 'bl'].map(k => T([res.quad[k].x, res.quad[k].y]));
+    dCtx.strokeStyle = '#00e5a0'; dCtx.lineWidth = 2;
+    dCtx.beginPath();
+    P.forEach((p, i) => i ? dCtx.lineTo(p[0], p[1]) : dCtx.moveTo(p[0], p[1]));
+    dCtx.closePath(); dCtx.stroke();
+    dCtx.fillStyle = '#3ea6ff';
+    for (const m of [...res.timing.modulesA, ...res.timing.modulesB]) {
+      const p = T(m);
+      dCtx.beginPath(); dCtx.arc(p[0], p[1], 2, 0, 7); dCtx.fill();
     }
+    dCtx.fillStyle = '#00e5a0';
+    dCtx.beginPath(); dCtx.arc(P[3][0], P[3][1], 4, 0, 7); dCtx.fill();
   }
-
-  debugC.style.borderColor = accepted ? '#00e5a0' : 'var(--border)';
+  $('dbg-note').textContent = res.ok
+    ? 'apex ' + res.apexRatio.toFixed(2) + ' · fill ' + res.fill.toFixed(2) +
+      ' · blobs ' + res.comps.length
+    : (res.tried.length ? 'rejected: ' + res.tried[0].reason : 'no candidate blobs');
 }
 
-// ── Boot ──
+// ── small helpers ─────────────────────────────────────────────────
+function rotationOf(q) {
+  return Math.atan2(q.br.y - q.bl.y, q.br.x - q.bl.x) * 180 / Math.PI;
+}
+function sideOf(q) {
+  return (Math.hypot(q.tr.x - q.tl.x, q.tr.y - q.tl.y) +
+          Math.hypot(q.br.x - q.bl.x, q.br.y - q.bl.y)) / 2;
+}
+function drift(a, b) {
+  const s = sideOf(b) || 1;
+  return Math.max(...['tl', 'tr', 'br', 'bl'].map(k => Math.hypot(a[k].x - b[k].x, a[k].y - b[k].y))) / s;
+}
+function jitter(hist) {
+  if (hist.length < 2) return Infinity;
+  const last = hist[hist.length - 1];
+  return Math.max(...hist.slice(0, -1).map(q => drift(q, last)));
+}
+function setStatus(t, c) { $('stxt').textContent = t; $('dot').style.background = c; }
+function say(t) { $('msg').textContent = t; }
+function setT(id, ms) { $(id).textContent = ms.toFixed(1); }
+
+// ── controls ──────────────────────────────────────────────────────
+$('again').addEventListener('click', () => {
+  phase = 'scanning'; stableHist = []; acc = null; accN = 0; bestFrame = null;
+  $('result').style.display = 'none';
+  $('empty').style.display = 'flex';
+  oCtx.clearRect(0, 0, overlay.width, overlay.height);
+  setStatus('Scanning', 'var(--warn)');
+});
+$('toggle-src').addEventListener('click', e => {
+  showAveraged = !showAveraged;
+  e.target.textContent = showAveraged ? 'Showing: averaged' : 'Showing: sharpest frame';
+  render();
+});
+$('save').addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.download = 'datamatrix-' + Date.now() + '.png';
+  a.href = cropC.toDataURL('image/png');
+  a.click();
+});
+$('copy').addEventListener('click', async e => {
+  const q = lockedMeta.quad, k = video.videoWidth / procC.width;
+  const payload = {
+    dimension: lockedMeta.dim,
+    modulePx: +(lockedMeta.module * k).toFixed(2),
+    rotationDeg: +rotationOf(q).toFixed(2),
+    cornersFullRes: Object.fromEntries(['tl', 'tr', 'br', 'bl'].map(n =>
+      [n, [+(q[n].x * k).toFixed(2), +(q[n].y * k).toFixed(2)]])),
+    frameSize: [video.videoWidth, video.videoHeight],
+    framesAveraged: accN,
+    edgesFrom: lockedMeta.refined ? 'timing-pattern' : 'estimated'
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    e.target.textContent = 'Copied';
+    setTimeout(() => e.target.textContent = 'Copy JSON', 1200);
+  } catch (err) { say('Clipboard blocked — ' + JSON.stringify(payload)); }
+});
+$('margin').addEventListener('click', e => {
+  marginIdx = (marginIdx + 1) % MARGINS.length;
+  e.target.textContent = 'Crop: ' + (QUIET() === 0 ? 'tight' : QUIET() + ' module');
+  if (phase === 'capturing') abortCapture();
+  if (phase === 'done') $('again').click();
+});
+$('binz').addEventListener('click', e => {
+  opts.binarizer = opts.binarizer === 'hybrid' ? 'mean' : 'hybrid';
+  e.target.textContent = 'Binariser: ' + opts.binarizer;
+});
+
 startCamera();
+
 </script>
 </body>
 </html>
